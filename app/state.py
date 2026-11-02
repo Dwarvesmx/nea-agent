@@ -113,6 +113,7 @@ class PendingSend:
     # Y qué despacho estaba contestando: el CRM lo exige al responder por el
     # cerebro, y cuando el worker despierta el turno ya no existe para dárselo.
     dispatch_id: str = ""
+    response_id: str = ""
 
 
 @dataclass
@@ -212,9 +213,11 @@ class Store(Protocol):
         organization_id: str = "",
         organization_slug: str = "",
         dispatch_id: str = "",
+        response_id: str = "",
+        next_retry_at: datetime | None = None,
     ) -> int: ...
     async def due_pending_sends(self, now: datetime) -> list[PendingSend]: ...
-    async def mark_pending_send_delivered(self, pending_id: int) -> None: ...
+    async def mark_pending_send_delivered(self, pending_id: int) -> bool: ...
     async def mark_pending_send_abandoned(self, pending_id: int) -> None: ...
     async def reschedule_pending_send(
         self, pending_id: int, attempts: int, next_retry_at: datetime
@@ -364,16 +367,19 @@ class MemoryStore(MemoryDispatchStore):
         organization_id: str = "",
         organization_slug: str = "",
         dispatch_id: str = "",
+        response_id: str = "",
+        next_retry_at: datetime | None = None,
     ) -> int:
         pid = next(self._ids)
         now = utcnow()
         self.pending_sends[pid] = PendingSend(
             id=pid, conversation_id=conversation_id,
             crm_conversation_id=crm_conversation_id, content=content,
-            attempts=0, created_at=now, next_retry_at=now,
+            attempts=0, created_at=now, next_retry_at=next_retry_at or now,
             organization_id=organization_id,
             organization_slug=organization_slug,
             dispatch_id=dispatch_id,
+            response_id=response_id,
         )
         return pid
 
@@ -384,8 +390,12 @@ class MemoryStore(MemoryDispatchStore):
             and p.next_retry_at <= now
         ]
 
-    async def mark_pending_send_delivered(self, pending_id: int) -> None:
-        self.pending_sends[pending_id].delivered_at = utcnow()
+    async def mark_pending_send_delivered(self, pending_id: int) -> bool:
+        item = self.pending_sends[pending_id]
+        if item.delivered_at is not None or item.abandoned_at is not None:
+            return False
+        item.delivered_at = utcnow()
+        return True
 
     async def mark_pending_send_abandoned(self, pending_id: int) -> None:
         self.pending_sends[pending_id].abandoned_at = utcnow()

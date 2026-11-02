@@ -249,6 +249,7 @@ def test_el_mapeo_de_pending_send_no_se_deja_ninguna_columna():
         "organization_id": "org_a",
         "organization_slug": "negocio-a",
         "dispatch_id": "dsp_1",
+        "response_id": "e5e46abb-14d3-4fe2-b7c9-497da6e98791",
     }
     pendiente = _pending_send_desde_fila(fila)
 

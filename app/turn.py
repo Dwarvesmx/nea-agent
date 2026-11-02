@@ -9,7 +9,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+from uuid import uuid4
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -780,13 +782,35 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str) -> b
     """Envía vía el CRM. Si el turno agota sus reintentos, la respuesta NO se
     descarta: se encola en pending_send y el SenderWorker la reintenta con
     backoff hasta entregar o agotar 24 h (incidente 2026-08-03)."""
+    durable = os.getenv("NEA_DURABLE_RESPONSE_IDS", "false").lower() == "true"
+    response_id = str(uuid4()) if durable else ""
+    pending_id = None
+    if durable:
+        org_id, org_slug = ctx.organizacion or ("", "")
+        despacho_de = getattr(ctx.crm, "despacho_de", None)
+        dispatch_id = despacho_de(crm_conv_id) if callable(despacho_de) else ""
+        # Guardar antes de la primera llamada: un reinicio conserva el UUID.
+        # Reserva inicial: evita que el barrido envíe simultáneamente con los
+        # cuatro intentos del turno (HTTP tiene timeout de 15 s por intento).
+        # Si el proceso muere, la fila vuelve a ser elegible al vencerla.
+        pending_id = await ctx.store.enqueue_pending_send(
+            conv_id, crm_conv_id, text, org_id, org_slug, dispatch_id, response_id,
+            utcnow() + timedelta(minutes=2),
+        )
     for attempt in range(SEND_ATTEMPTS):
         try:
-            await ctx.crm.send_message(crm_conv_id, text)
+            if response_id:
+                await ctx.crm.send_message(crm_conv_id, text, response_id=response_id)
+            else:
+                await ctx.crm.send_message(crm_conv_id, text)
+            if pending_id is not None:
+                return await ctx.store.mark_pending_send_delivered(pending_id)
             return True
         except CrmConflict as exc:
             # ai_paused / window_closed: silencio respetuoso, sin reintento.
             logger.info("envío bloqueado por el CRM (%s) — silencio", exc.code)
+            if pending_id is not None:
+                await ctx.store.mark_pending_send_abandoned(pending_id)
             return False
         except CrmError as exc:
             logger.warning("envío falló (intento %d): %s", attempt + 1, exc)
@@ -801,9 +825,12 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str) -> b
     # sabe —recibe conversación y texto—, se lo pide al cliente, que sí.
     despacho_de = getattr(ctx.crm, "despacho_de", None)
     dispatch_id = despacho_de(crm_conv_id) if callable(despacho_de) else ""
-    pending_id = await ctx.store.enqueue_pending_send(
-        conv_id, crm_conv_id, text, org_id, org_slug, dispatch_id
-    )
+    if pending_id is None:
+        pending_id = await ctx.store.enqueue_pending_send(
+            conv_id, crm_conv_id, text, org_id, org_slug, dispatch_id
+        )
+    else:
+        await ctx.store.reschedule_pending_send(pending_id, 0, utcnow())
     logger.error(
         "envío agotó reintentos del turno — encolado como pending_send %d",
         pending_id,

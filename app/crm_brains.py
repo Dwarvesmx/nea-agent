@@ -200,7 +200,7 @@ class BrainsCrmClient(CrmClient):
         return super()._request(method, ruta, **kwargs)
 
     async def send_message(
-        self, conversation_id: str, text: str, dispatch_id: str = ""
+        self, conversation_id: str, text: str, dispatch_id: str = "", *, response_id: str = ""
     ) -> dict[str, Any]:
         """Responder por el cerebro. Dos cosas que el de `/api/bot` no hacía.
 
@@ -223,6 +223,7 @@ class BrainsCrmClient(CrmClient):
                 "dispatchId": dispatch_id,
                 "conversationId": conversation_id,
                 "text": text,
+                **({"responseId": response_id} if response_id else {}),
             },
         )
         if resp.status_code == 409:

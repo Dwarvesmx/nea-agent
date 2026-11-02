@@ -135,6 +135,9 @@ class FollowupWorker:
                     conv.wa_identity,
                 )
                 return
+            if ctx.registro is None:
+                logger.warning("followup %s: sin registro de organización — omitido", conv.wa_identity)
+                return
             ctx = replace(
                 ctx,
                 llm=ctx.registro.llm(
@@ -172,13 +175,19 @@ class FollowupWorker:
         if not text:
             logger.warning("followup %s: LLM sin texto — omitido", conv.wa_identity)
             return
-        try:
-            await ctx.crm.send_message(str(crm_conv_id), text)
-        except CrmConflict as exc:
-            logger.info("followup %s: bloqueado por el CRM (%s)", conv.wa_identity, exc.code)
-            return
-        except CrmError as exc:
-            logger.warning("followup %s: envío falló (%s)", conv.wa_identity, exc)
-            return
+        import os
+        if os.getenv("NEA_DURABLE_RESPONSE_IDS", "false").lower() == "true":
+            from app.turn import _send
+            if not await _send(ctx, conv.id, str(crm_conv_id), text):
+                return
+        else:
+            try:
+                await ctx.crm.send_message(str(crm_conv_id), text)
+            except CrmConflict as exc:
+                logger.info("followup %s: bloqueado por el CRM (%s)", conv.wa_identity, exc.code)
+                return
+            except CrmError as exc:
+                logger.warning("followup %s: envío falló (%s)", conv.wa_identity, exc)
+                return
         await ctx.store.add_message(conv.id, "assistant", text)
         logger.info("followup %s: empujón único enviado", conv.wa_identity)

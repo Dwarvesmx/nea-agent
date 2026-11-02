@@ -241,11 +241,11 @@ class CrmClient:
         data: dict[str, Any] = resp.json()
         return data
 
-    async def send_message(self, conversation_id: str, text: str) -> dict[str, Any]:
+    async def send_message(self, conversation_id: str, text: str, *, response_id: str = "") -> dict[str, Any]:
         resp = await self._request(
             "POST",
             "/api/bot/messages",
-            json={"conversationId": conversation_id, "text": text},
+            json={"conversationId": conversation_id, "text": text, **({"responseId": response_id} if response_id else {})},
         )
         if resp.status_code == 409:
             raise CrmConflict(_conflict_code(resp))

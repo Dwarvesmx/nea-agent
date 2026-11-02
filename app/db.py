@@ -70,6 +70,7 @@ def _pending_send_desde_fila(row: Any) -> PendingSend:
         organization_id=row["organization_id"],
         organization_slug=row["organization_slug"],
         dispatch_id=row["dispatch_id"],
+        response_id=row["response_id"] or "",
     )
 
 
@@ -325,13 +326,15 @@ class PgStore(PgDispatchStore):
         organization_id: str = "",
         organization_slug: str = "",
         dispatch_id: str = "",
+        response_id: str = "",
+        next_retry_at: datetime | None = None,
     ) -> int:
         row = await self.pool.fetchrow(
             """
             INSERT INTO pending_send
               (conversation_id, crm_conversation_id, content,
-               organization_id, organization_slug, dispatch_id)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+               organization_id, organization_slug, dispatch_id, response_id, next_retry_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), COALESCE($8::timestamptz, now())) RETURNING id
             """,
             conversation_id,
             crm_conversation_id,
@@ -339,6 +342,8 @@ class PgStore(PgDispatchStore):
             organization_id,
             organization_slug,
             dispatch_id,
+            response_id,
+            next_retry_at,
         )
         assert row is not None
         return row["id"]
@@ -355,10 +360,12 @@ class PgStore(PgDispatchStore):
         )
         return [_pending_send_desde_fila(r) for r in rows]
 
-    async def mark_pending_send_delivered(self, pending_id: int) -> None:
-        await self.pool.execute(
-            "UPDATE pending_send SET delivered_at = now() WHERE id = $1", pending_id
+    async def mark_pending_send_delivered(self, pending_id: int) -> bool:
+        row = await self.pool.fetchrow(
+            "UPDATE pending_send SET delivered_at = now() WHERE id = $1 "
+            "AND delivered_at IS NULL AND abandoned_at IS NULL RETURNING id", pending_id
         )
+        return row is not None
 
     async def mark_pending_send_abandoned(self, pending_id: int) -> None:
         await self.pool.execute(
