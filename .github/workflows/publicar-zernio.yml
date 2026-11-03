@@ -1,4 +1,4 @@
-name: Publicar Zernio validado
+name: Publicar V1 validado Linux
 on:
   push:
     branches: [zernio-identidad-respuesta]
@@ -17,13 +17,13 @@ jobs:
       contents: read
       packages: write
     env:
-      SOURCE_SHA: aefc25c4e2c2478c44443ae7edd3dc850474353e
+      SOURCE_SHA: ${{ github.sha }}
       IMAGE: ghcr.io/dwarvesmx/nea-agent
       VERSION: 2.0.2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: aefc25c4e2c2478c44443ae7edd3dc850474353e
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Comprobar fuente exacta
         shell: bash
@@ -42,13 +42,13 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/dwarvesmx/nea-agent:2.0.2-zernio-aefc25c4e2c2478c44443ae7edd3dc850474353e
+          tags: ghcr.io/dwarvesmx/nea-agent:2.0.2-zernio-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/Dwarvesmx/nea-agent
-            org.opencontainers.image.revision=aefc25c4e2c2478c44443ae7edd3dc850474353e
+            org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=2.0.2
           build-args: |
-            SOURCE_COMMIT=aefc25c4e2c2478c44443ae7edd3dc850474353e
+            SOURCE_COMMIT=${{ github.sha }}
             NEA_VERSION=2.0.2
           provenance: mode=max
           sbom: true
@@ -77,12 +77,20 @@ jobs:
           PY
           echo "$REF" | tee image-reference.txt
           printf '### Imagen verificada\n\n%s\n\nFuente: %s\n\nPlataforma: linux/amd64\n' "$REF" "$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verificar migración y código V1 empaquetados
+        shell: bash
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker run --rm --platform linux/amd64 --network none --read-only \
+            --entrypoint sh "$IMAGE@$DIGEST" -c 'test -f /app/app/knowledge.py && test -f /app/migrations/010_pending_handoff.sql && sha256sum /app/migrations/010_pending_handoff.sql' > migrations-sha256.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: evidencia-nea-agent-aefc25c4e2c2478c44443ae7edd3dc850474353e
+          name: evidencia-nea-agent-${{ github.sha }}
           path: |
             manifest.txt
             image-inspect.json
             image-reference.txt
+            migrations-sha256.txt
           retention-days: 30
 
