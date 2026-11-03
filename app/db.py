@@ -71,6 +71,7 @@ def _pending_send_desde_fila(row: Any) -> PendingSend:
         organization_slug=row["organization_slug"],
         dispatch_id=row["dispatch_id"],
         response_id=row["response_id"] or "",
+        handoff_reason=row.get("handoff_reason") or "",
     )
 
 
@@ -328,13 +329,14 @@ class PgStore(PgDispatchStore):
         dispatch_id: str = "",
         response_id: str = "",
         next_retry_at: datetime | None = None,
+        handoff_reason: str = "",
     ) -> int:
         row = await self.pool.fetchrow(
             """
             INSERT INTO pending_send
               (conversation_id, crm_conversation_id, content,
-               organization_id, organization_slug, dispatch_id, response_id, next_retry_at)
-            VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), COALESCE($8::timestamptz, now())) RETURNING id
+               organization_id, organization_slug, dispatch_id, response_id, next_retry_at, handoff_reason)
+            VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), COALESCE($8::timestamptz, now()), NULLIF($9, '')) RETURNING id
             """,
             conversation_id,
             crm_conversation_id,
@@ -344,6 +346,7 @@ class PgStore(PgDispatchStore):
             dispatch_id,
             response_id,
             next_retry_at,
+            handoff_reason,
         )
         assert row is not None
         return row["id"]

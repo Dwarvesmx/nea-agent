@@ -250,6 +250,7 @@ def test_el_mapeo_de_pending_send_no_se_deja_ninguna_columna():
         "organization_slug": "negocio-a",
         "dispatch_id": "dsp_1",
         "response_id": "e5e46abb-14d3-4fe2-b7c9-497da6e98791",
+        "handoff_reason": "cliente",
     }
     pendiente = _pending_send_desde_fila(fila)
 
@@ -257,3 +258,21 @@ def test_el_mapeo_de_pending_send_no_se_deja_ninguna_columna():
         assert getattr(pendiente, campo.name) == fila[campo.name], (
             f"el mapeo no lee {campo.name}"
         )
+
+
+async def test_reinicio_conserva_identidad_y_pausa_pendiente(respx_mock):
+    import json
+    ctx = make_ctx()
+    conv = await ctx.store.get_or_create_conversation(IDENTITY)
+    response_id = "e5e46abb-14d3-4fe2-b7c9-497da6e98791"
+    await ctx.store.enqueue_pending_send(conv.id, CRM_CONV_ID, "Te paso con un asesor", response_id=response_id, handoff_reason="cliente")
+    route = respx_mock.post(f"{CRM_URL}/api/bot/messages").mock(return_value=httpx.Response(200,json={"messageId":"msg", "handoffManaged":True}))
+    handoff = respx_mock.post(f"{CRM_URL}/api/bot/handoff").mock(return_value=httpx.Response(200,json={"ok":True}))
+    worker = SenderWorker(ctx)
+    await worker.tick()
+    body = json.loads(route.calls[0].request.content)
+    assert body["responseId"] == response_id
+    assert body["handoffReason"] == "cliente"
+    assert handoff.call_count == 0
+    assert not await ctx.store.due_pending_sends(utcnow())
+    await ctx.crm.aclose()

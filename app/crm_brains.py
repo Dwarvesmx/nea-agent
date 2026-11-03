@@ -200,7 +200,7 @@ class BrainsCrmClient(CrmClient):
         return super()._request(method, ruta, **kwargs)
 
     async def send_message(
-        self, conversation_id: str, text: str, dispatch_id: str = "", *, response_id: str = ""
+        self, conversation_id: str, text: str, dispatch_id: str = "", *, response_id: str = "", handoff_reason: str = ""
     ) -> dict[str, Any]:
         """Responder por el cerebro. Dos cosas que el de `/api/bot` no hacía.
 

@@ -50,14 +50,15 @@ async def test_uuid_durable_antes_del_primer_intento_y_tras_reinicio(postgres_st
 
     async def interrupted(request):
         body = json.loads(request.content)
-        rows = await store.pool.fetch("select response_id from pending_send")
+        rows = await store.pool.fetch("select response_id, handoff_reason from pending_send")
         assert len(rows) == 1 and rows[0]["response_id"] == body["responseId"]
+        assert rows[0]["handoff_reason"] == body["handoffReason"] == "cliente"
         observed.append(body["responseId"])
         raise asyncio.CancelledError()
 
     route = respx_mock.post(f"{CRM_URL}/api/bot/messages").mock(side_effect=interrupted)
     with pytest.raises(asyncio.CancelledError):
-        await turn._send(ctx, conv.id, CRM_CONV_ID, "igual")
+        await turn._send(ctx, conv.id, CRM_CONV_ID, "igual", handoff_reason="cliente")
     await store.aclose()
     await store.connect()
     # Vence la reserva del turno muerto, sin esperar tiempo real.
@@ -65,9 +66,10 @@ async def test_uuid_durable_antes_del_primer_intento_y_tras_reinicio(postgres_st
     # Nuevo cliente y pool simulan un proceso que arranca con la fila pendiente.
     ctx2 = make_ctx()
     ctx2.store = store
-    route.mock(return_value=httpx.Response(200, json={"messageId": "ficticio"}))
+    route.mock(return_value=httpx.Response(200, json={"messageId": "ficticio", "handoffManaged": True}))
     await SenderWorker(ctx2).tick()
     assert json.loads(route.calls.last.request.content)["responseId"] == observed[0]
+    assert json.loads(route.calls.last.request.content)["handoffReason"] == "cliente"
     assert uuid.UUID(observed[0]).version == 4
     assert await store.pool.fetchval("select delivered_at is not null from pending_send")
     await ctx.crm.aclose()

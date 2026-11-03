@@ -116,6 +116,7 @@ class _Turno:
     crm_conversation_id: str | None = None
     # El motivo del handoff que este turno ya registró, si registró uno.
     handoff: str | None = None
+    handoff_managed: bool = False
 
 
 class TurnoSinCrm(Exception):
@@ -376,6 +377,8 @@ async def run_turn(
     referral = next((m.referral_headline for m in inbound if m.referral_headline), None)
     offered = await ctx.store.get_offered_slots(conv.id)
     profile = await resolve_profile(ctx)
+    from app.knowledge import with_document_knowledge
+    profile = await with_document_knowledge(profile, ctx.crm, " ".join(m.text or m.media_caption or "" for m in inbound)[-500:])
     # 034 — Con «agendar» apagada en el CRM, el turno se porta como contra un
     # CRM sin agenda: no se le enseñan las herramientas y el prompt dice que
     # por aquí no se agenda.
@@ -497,14 +500,17 @@ async def run_turn(
     if final_text and final_text.strip():
         final_text = a_whatsapp(runtime.finalize_reply(final_text.strip()))
     if final_text and final_text.strip():
-        sent = await _send(ctx, conv.id, str(crm_conv_id), final_text)
+        sent = await _send(ctx, conv.id, str(crm_conv_id), final_text, handoff_reason=runtime.handoff_reason, turno=turno)
         if sent:
             await ctx.store.add_message(conv.id, "assistant", final_text)
 
     # El handoff se ejecuta DESPUÉS de la despedida (si no, el CRM la rechaza
     # con 409 ai_paused).
-    if runtime.handoff_reason is not None:
+    if runtime.handoff_reason is not None and not turno.handoff_managed:
         await _safe_handoff(ctx, str(crm_conv_id), runtime.handoff_reason, turno)
+
+    if turno.handoff_managed and runtime.handoff_reason:
+        turno.handoff = runtime.handoff_reason
 
     # --- Fase + seguimiento -----------------------------------------------
     updates: dict[str, Any] = {"greeted": True}
@@ -778,11 +784,14 @@ async def _tool_loop(
 SEND_ATTEMPTS = 4  # backoff 1 s, 2 s, 4 s entre intentos (~7 s en el turno)
 
 
-async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str) -> bool:
+async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str, *, handoff_reason: str | None = None, turno: _Turno | None = None) -> bool:
     """Envía vía el CRM. Si el turno agota sus reintentos, la respuesta NO se
     descarta: se encola en pending_send y el SenderWorker la reintenta con
     backoff hasta entregar o agotar 24 h (incidente 2026-08-03)."""
     durable = os.getenv("NEA_DURABLE_RESPONSE_IDS", "false").lower() == "true"
+    handoff_reason = handoff_reason if durable and not getattr(ctx.settings, "cloud_mode", False) else None
+    if turno is not None and handoff_reason:
+        turno.handoff_managed = True  # El propósito viaja en la misma intención durable.
     response_id = str(uuid4()) if durable else ""
     pending_id = None
     if durable:
@@ -796,11 +805,14 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str) -> b
         pending_id = await ctx.store.enqueue_pending_send(
             conv_id, crm_conv_id, text, org_id, org_slug, dispatch_id, response_id,
             utcnow() + timedelta(minutes=2),
+            handoff_reason=handoff_reason or "",
         )
     for attempt in range(SEND_ATTEMPTS):
         try:
             if response_id:
-                await ctx.crm.send_message(crm_conv_id, text, response_id=response_id)
+                result = await ctx.crm.send_message(crm_conv_id, text, response_id=response_id, **({"handoff_reason": handoff_reason} if handoff_reason else {}))
+                if turno is not None and handoff_reason and isinstance(result, dict):
+                    turno.handoff_managed = result.get("handoffManaged") is True
             else:
                 await ctx.crm.send_message(crm_conv_id, text)
             if pending_id is not None:

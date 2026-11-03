@@ -76,9 +76,9 @@ class SenderWorker:
             registrar_despacho(item.crm_conversation_id, item.dispatch_id)
         try:
             if item.response_id:
-                await ctx.crm.send_message(item.crm_conversation_id, item.content, response_id=item.response_id)
+                result = await ctx.crm.send_message(item.crm_conversation_id, item.content, response_id=item.response_id, **({"handoff_reason": item.handoff_reason} if item.handoff_reason else {}))
             else:
-                await ctx.crm.send_message(item.crm_conversation_id, item.content)
+                result = await ctx.crm.send_message(item.crm_conversation_id, item.content)
         except CrmConflict as exc:
             # ai_paused / window_closed: ya no procede — silencio respetuoso.
             logger.info(
@@ -104,6 +104,8 @@ class SenderWorker:
             return
         if not await ctx.store.mark_pending_send_delivered(item.id):
             return
+        if item.handoff_reason and isinstance(result, dict) and not result.get("handoffManaged"):
+            await ctx.crm.post_handoff(item.crm_conversation_id, item.handoff_reason)
         # Al historial local: Nea debe recordar lo que (por fin) dijo.
         await ctx.store.add_message(item.conversation_id, "assistant", item.content)
         logger.info("sender: pending %d entregado", item.id)

@@ -182,3 +182,20 @@ async def test_si_la_segunda_tambien_sale_mal_silencio_y_handoff(ctx, client, re
     assert routes["messages"].call_count == 0
     assert routes["handoff"].call_count == 1
     assert json.loads(routes["handoff"].calls[0].request.content)["reason"] == "error"
+
+
+async def test_handoff_durable_delega_pausa_al_ack_zernio(ctx, client, respx_mock, monkeypatch):
+    monkeypatch.setenv("NEA_DURABLE_RESPONSE_IDS", "true")
+    routes = mock_crm_basics(respx_mock)
+    routes["messages"].mock(return_value=__import__("httpx").Response(200, json={"messageId":"msg_notice", "handoffManaged":True}))
+    ctx.llm.replies = [
+        LlmReply(content=None, tool_calls=[ToolCall(id="tc1", name="handoff", arguments={"reason":"cliente"})]),
+        LlmReply(content="Te paso con un asesor."),
+    ]
+    await despachar(client, ctx, text="quiero una persona")
+    await asyncio.sleep(0.25)
+    assert routes["messages"].call_count == 1
+    body = json.loads(routes["messages"].calls[0].request.content)
+    assert body["handoffReason"] == "cliente"
+    assert len(body["responseId"]) == 36
+    assert routes["handoff"].call_count == 0

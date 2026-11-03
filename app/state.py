@@ -114,6 +114,7 @@ class PendingSend:
     # cerebro, y cuando el worker despierta el turno ya no existe para dárselo.
     dispatch_id: str = ""
     response_id: str = ""
+    handoff_reason: str = ""
 
 
 @dataclass
@@ -215,6 +216,7 @@ class Store(Protocol):
         dispatch_id: str = "",
         response_id: str = "",
         next_retry_at: datetime | None = None,
+        handoff_reason: str = "",
     ) -> int: ...
     async def due_pending_sends(self, now: datetime) -> list[PendingSend]: ...
     async def mark_pending_send_delivered(self, pending_id: int) -> bool: ...
@@ -369,6 +371,7 @@ class MemoryStore(MemoryDispatchStore):
         dispatch_id: str = "",
         response_id: str = "",
         next_retry_at: datetime | None = None,
+        handoff_reason: str = "",
     ) -> int:
         pid = next(self._ids)
         now = utcnow()
@@ -380,6 +383,7 @@ class MemoryStore(MemoryDispatchStore):
             organization_slug=organization_slug,
             dispatch_id=dispatch_id,
             response_id=response_id,
+            handoff_reason=handoff_reason,
         )
         return pid
 

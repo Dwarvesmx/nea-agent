@@ -47,6 +47,7 @@ class BusinessProfile:
     escalation_rules: str | None = None
     greeting: str | None = None
     kb_text: str | None = None
+    knowledge_path: str | None = None
     resources: list[dict[str, str]] = field(default_factory=list)
     # 034 — El rol y las herramientas encendidas (claves del catálogo del CRM:
     # ficha, agendar, reprogramar, salida, escalar). `None` = todas, como un
@@ -91,6 +92,7 @@ def profile_from_payload(payload: dict[str, Any], default_name: str) -> Business
         escalation_rules=prof.get("escalationRules") or None,
         greeting=prof.get("greeting") or None,
         kb_text=kb_text,
+        knowledge_path="/api/bot/knowledge" if (payload.get("knowledge") or {}).get("path") == "/api/bot/knowledge" else None,
         resources=resources,
         role=str(prof.get("role") or "calificador"),
         tools=_herramientas(prof.get("tools")),
