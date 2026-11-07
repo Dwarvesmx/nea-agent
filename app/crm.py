@@ -198,6 +198,39 @@ class CrmClient:
         # que el CRM despachó, aunque esa persona tenga otra.
         self._conversaciones: dict[str, str] = {}
 
+    async def dispatch_demo(self, *, organization_id: str, session_id: str, operation_key: str, text: str | None = None, action: str = "dispatch") -> dict[str, Any]:
+        import hashlib
+        from app.demo_session import DemoSessionError
+        body={"contractVersion":1,"action":action,"organizationId":organization_id,"sessionId":session_id,"operationKey":operation_key}
+        if text is not None:body["responseHash"]=hashlib.sha256(text.encode()).hexdigest()
+        try:response=await self._http.post("/api/bot/demo/delivery",json=body)
+        except httpx.HTTPError:raise DemoSessionError("delivery_result_uncertain") from None
+        if response.status_code!=200:raise DemoSessionError("delivery_rejected",response.status_code)
+        result=response.json()
+        if result.get("status") not in ("pending","processing","accepted","delivered","failed","cancelled","uncertain"):raise DemoSessionError("invalid_delivery_response")
+        return result
+
+    async def generate_demo(self, *, organization_id: str, space_id: str, session_id: str, operation_key: str, text: str) -> dict[str, Any]:
+        from app.demo_session import DemoSessionError
+        body={"contractVersion":1,"organizationId":organization_id,"spaceId":space_id,"sessionId":session_id,"operationKey":operation_key,"text":text}
+        try:
+            response=await self._http.post("/api/bot/demo/generate",json=body)
+        except httpx.HTTPError:
+            raise DemoSessionError("result_uncertain") from None
+        if response.status_code!=200:raise DemoSessionError("generation_rejected",response.status_code)
+        result=response.json()
+        if result.get("status") not in ("settled","uncertain","reserved","released"):raise DemoSessionError("invalid_response")
+        return result
+
+    async def demo_finance_operation(self, **kwargs: Any) -> dict[str, Any]:
+        from app.demo_finance import DemoFinanceClient
+        return await DemoFinanceClient(self._http).operation(**kwargs)
+
+    async def resolve_demo_session(self, **kwargs: Any) -> dict[str, Any]:
+        """Contrato separado del contexto comercial; sus errores nunca hacen fallback."""
+        from app.demo_session import DemoSessionClient
+        return await DemoSessionClient(self._http).resolve(**kwargs)
+
     def registrar(self, identity: str, conversation_id: str) -> None:
         """Asocia una identidad con su conversación, desde el despacho."""
         self._conversaciones[identity] = conversation_id

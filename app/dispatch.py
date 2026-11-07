@@ -17,6 +17,7 @@ Eso quita tres cosas que Nea hacía por estar delante del CRM:
 """
 from __future__ import annotations
 
+import os
 import hashlib
 import hmac
 import json
@@ -27,6 +28,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.dispatch_store import DispatchConflict
+from app.demo_contract import has_demo_scope, validate_demo_envelope
 from app.multiorg import organizacion_del_despacho
 from app.http_limits import limited_body
 from app.state import AppContext, InboundMessage
@@ -151,6 +154,15 @@ async def recibir(request: Request) -> Any:
     if not isinstance(payload, dict):
         return JSONResponse({"error": "cuerpo inesperado"}, status_code=400)
 
+    if has_demo_scope(payload):
+        try:
+            validate_demo_envelope(payload)
+        except ValueError:
+            return JSONResponse({"error": "invalid_demo_contract"}, status_code=422)
+        # Sin ACK durable hasta disponer del consumidor aislado y mediación.
+        if os.environ.get("DEMO_CONSUMER_ENABLED") != "true":
+            return JSONResponse({"error": "demo_capability_unavailable"}, status_code=503)
+
     if payload.get("type") == EVENTO_OLVIDO:
         return await _recibir_olvido(ctx, payload)
 
@@ -172,6 +184,8 @@ async def recibir(request: Request) -> Any:
         return JSONResponse({"error": "despacho inválido"}, status_code=422)
     try:
         await ctx.store.enqueue_dispatch(org[0] if org else ctx.settings.crm_organization, payload)
+    except DispatchConflict:
+        return JSONResponse({"error": "dispatch_payload_conflict"}, status_code=409)
     except Exception:
         logger.exception("no se pudo persistir el despacho")
         return JSONResponse({"error": "almacenamiento indisponible"}, status_code=503)
@@ -242,6 +256,8 @@ async def olvidar(ctx: AppContext, payload: dict[str, Any]) -> None:
 
 
 async def _procesar(ctx: AppContext, payload: dict[str, Any], *, durable: bool = False) -> None:
+    if has_demo_scope(payload):
+        raise ValueError("demo_must_not_enter_commercial_processor")
     dispatch_id = str(payload.get("dispatchId") or "")
     conversation = payload.get("conversation") or {}
     conversation_id = str(conversation.get("id") or "")

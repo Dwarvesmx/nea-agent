@@ -16,6 +16,10 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from uuid import uuid4
 
 
+class DispatchConflict(ValueError):
+    """Mismo identificador durable con un sobre distinto."""
+
+
 @dataclass
 class DispatchJob:
     payload: dict[str, Any]
@@ -28,9 +32,14 @@ class PgDispatchStore:
     pool: Any
 
     async def enqueue_dispatch(self, org: str, payload: dict[str, Any]) -> None:
-        await self.pool.execute("""INSERT INTO dispatch_inbox
+        saved = await self.pool.fetchval("""INSERT INTO dispatch_inbox
           (organization_id,dispatch_id,conversation_id,payload) VALUES ($1,$2,$3,$4::jsonb)
-          ON CONFLICT DO NOTHING""", org, payload["dispatchId"], payload["conversation"]["id"], json.dumps(payload))
+          ON CONFLICT (organization_id,dispatch_id) DO UPDATE
+          SET dispatch_id=dispatch_inbox.dispatch_id RETURNING payload""",
+          org, payload["dispatchId"], payload["conversation"]["id"], json.dumps(payload))
+        stored = json.loads(saved) if isinstance(saved, str) else saved
+        if stored != payload:
+            raise DispatchConflict("dispatch_payload_conflict")
 
     async def forget_dispatches(self, org: str, conversation_id: str, keep: str) -> None:
         """The payload column holds the lead's messages verbatim. `keep` is the
@@ -93,7 +102,11 @@ class MemoryDispatchStore:
         return self.dispatch_inbox
 
     async def enqueue_dispatch(self, org: str, payload: dict[str, Any]) -> None:
-        self._inbox().setdefault((org, payload["dispatchId"]), {
+        inbox = self._inbox()
+        key = (org, payload["dispatchId"])
+        if key in inbox and inbox[key]["payload"] != payload:
+            raise DispatchConflict("dispatch_payload_conflict")
+        inbox.setdefault(key, {
             "payload": json.loads(json.dumps(payload)), "state": "queued", "available_at": datetime.now(timezone.utc),
         })
 

@@ -1,17 +1,21 @@
 """One bounded consumer per process; PostgreSQL serializes each organization."""
 from __future__ import annotations
 
+import os
 import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from app.demo_contract import has_demo_scope
 from app.multiorg import organizacion_del_despacho
 
 logger = logging.getLogger("nea.dispatch.worker")
 
 
 async def handoff(ctx: Any, payload: dict[str, Any]) -> None:
+    if has_demo_scope(payload):
+        raise ValueError("demo_must_not_handoff_commercial")
     client = ctx.crm
     if ctx.settings.multi_org:
         org = organizacion_del_despacho(payload)
@@ -28,6 +32,12 @@ async def drain_one(ctx: Any) -> bool:
             return False
 
         async def execute() -> None:
+            if has_demo_scope(job.payload):
+                if os.environ.get("DEMO_CONSUMER_ENABLED") != "true":
+                    raise ValueError("demo_capability_unavailable")
+                from app.demo_consumer import process_demo
+                await process_demo(ctx,job.payload)
+                return
             if job.payload.get("type") == EVENTO_OLVIDO:
                 # Not a turn: nothing to hand off, and replaying it is safe.
                 await olvidar(ctx, job.payload)
