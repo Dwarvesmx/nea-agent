@@ -11,6 +11,7 @@ from tests.test_dispatch_durable import cloud, payload, post
 def demo():
     data=payload()
     data['demo']={'contractVersion':1,'scope':{'kind':'demo','organizationId':'org_a','spaceId':'space_a','sessionId':'session_a','conversationId':'cv_a','authorizationId':'auth_a','routeGeneration':1,'profileVersionId':'profile_a'}}
+    data['channelContext']={'accountRef':'test-account','identity':{'kind':'phone','value':data['contact']['identity']}}
     return data
 
 
@@ -44,6 +45,18 @@ async def test_recovered_demo_never_handoffs_or_mutates_commercial_memory():
 def test_scope_validation(field,value):
     data=demo();data['demo']['scope'][field]=value
     with pytest.raises(ValueError):validate_demo_envelope(data)
+
+
+@pytest.mark.parametrize("identity", [
+    {"kind": "bsuid", "value": "521111111111"},
+    {"kind": "phone", "value": "521111111112"},
+    {"kind": "phone", "value": "bsuid:AA123"},
+])
+def test_demo_rejects_inconsistent_identity(identity):
+    data = demo()
+    data["channelContext"]["identity"] = identity
+    with pytest.raises(ValueError):
+        validate_demo_envelope(data)
 
 
 async def test_dispatch_identity_cannot_replace_original_envelope():

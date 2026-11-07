@@ -68,3 +68,7 @@ Regresiones Nea 41/41 más cliente de entrega 2/2, CRM mensajes/transporte 95 y 
 ## DC-F2B-CIERRE-01 — 2026-11-07
 
 Cierre local coordinado; no desplegado ni validado en WhatsApp real. Recuperación: inventario y archivos con SHA-256 en la carpeta local tmp/recuperacion-f2b-20261107-000341 del workspace superior; cotejar los hashes del inventario antes de restaurar archivos seleccionados, preservando los cambios posteriores. No copiar ni restaurar .env ni bases. Los SHA finales de la pareja de commits se registran en el manifiesto local de esa carpeta para evitar autorreferencias. La activación externa y selector real requieren aprobación y pruebas separadas.
+
+## WA-LANZAMIENTO-01 · 2026-11-07
+
+El CRM construye el sobre demo v1 a partir del webhook Zernio firmado y de la sesión asignada. Nea exige cuenta, clase de identidad y correspondencia con el contacto antes del ACK. Una identidad inválida se rechaza y no entra al consumidor comercial. Se reutilizan la cola PostgreSQL y los contratos de sesión, finanzas, generación y salida. Sin migración Nea. La integración con adaptadores controlados, el recorrido y las condiciones de lanzamiento se documentan en [WhatsApp Demo Center](../../vocero-crm-dev/docs/modonext/demo-center/11_WHATSAPP_LANZAMIENTO.md).
