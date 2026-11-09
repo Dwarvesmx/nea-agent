@@ -120,6 +120,32 @@ async def test_el_reintento_diferido_manda_el_despacho_de_su_fila(respx_mock):
     await ctx.crm.aclose()
 
 
+async def test_el_cliente_comercial_preserva_el_despacho_en_reintento(respx_mock):
+    import json
+    ctx = make_ctx()
+    conv = await ctx.store.get_or_create_conversation(IDENTITY)
+    await ctx.store.enqueue_pending_send(conv.id, CRM_CONV_ID, "respuesta", dispatch_id="dsp_origen")
+    ruta = respx_mock.post(f"{CRM_URL}/api/bot/messages").mock(
+        return_value=httpx.Response(200, json={"messageId": "msg_1"})
+    )
+    await SenderWorker(ctx).tick()
+    assert json.loads(ruta.calls.last.request.content)["dispatchId"] == "dsp_origen"
+    await ctx.crm.aclose()
+
+
+async def test_el_turno_comercial_envia_el_despacho_original(respx_mock):
+    import json
+    ctx = make_ctx()
+    conv = await ctx.store.get_or_create_conversation(IDENTITY)
+    ruta = respx_mock.post(f"{CRM_URL}/api/bot/messages").mock(
+        return_value=httpx.Response(200, json={"messageId": "msg_1"})
+    )
+    turno = turn._Turno(crm_conversation_id=CRM_CONV_ID, dispatch_id="dsp_original")
+    assert await turn._send(ctx, conv.id, CRM_CONV_ID, "respuesta", turno=turno)
+    assert json.loads(ruta.calls.last.request.content)["dispatchId"] == "dsp_original"
+    await ctx.crm.aclose()
+
+
 async def test_409_no_se_encola(respx_mock):
     ctx = make_ctx()
     conv = await ctx.store.get_or_create_conversation(IDENTITY)

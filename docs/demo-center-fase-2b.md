@@ -82,3 +82,6 @@ PROBADO: 33 pruebas focalizadas de turno, herramientas y despacho; además, inte
 2026-11-08 · DEMO-COMERCIAL-CIERRE-01: 33/33 pruebas focalizadas de Nea. CRM acreditó el circuito sintético con PostgreSQL descartable y manejo conservador de avisos. La herramienta no transmite consentimiento del modelo. Sin despliegue ni llamadas facturables. Aceptación real pendiente.
 
 Contraparte local CRM: $sha. Estas fuentes se publican y activan juntas únicamente tras autorización operativa.
+# 2026-11-09 — Trazabilidad comercial local
+
+IMPLEMENTADO LOCALMENTE: el cliente comercial transmite `dispatchId` del turno y el reintento durable conserva el identificador de la fila. El CRM incorpora su comprobación y el corte de generación; requiere los cambios coordinados y las migraciones 0042 y 0043 de Vocero. Pruebas focalizadas de Nea: `tests/test_sender.py`, 12 casos aprobados. Sin despliegue, WhatsApp real ni llamadas facturables.

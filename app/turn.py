@@ -798,11 +798,11 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str, *, h
     if turno is not None and handoff_reason:
         turno.handoff_managed = True  # El propósito viaja en la misma intención durable.
     response_id = str(uuid4()) if durable else ""
+    despacho_de = getattr(ctx.crm, "despacho_de", None)
+    dispatch_id = (turno.dispatch_id if turno else None) or (despacho_de(crm_conv_id) if callable(despacho_de) else "")
     pending_id = None
     if durable:
         org_id, org_slug = ctx.organizacion or ("", "")
-        despacho_de = getattr(ctx.crm, "despacho_de", None)
-        dispatch_id = despacho_de(crm_conv_id) if callable(despacho_de) else ""
         # Guardar antes de la primera llamada: un reinicio conserva el UUID.
         # Reserva inicial: evita que el barrido envíe simultáneamente con los
         # cuatro intentos del turno (HTTP tiene timeout de 15 s por intento).
@@ -815,11 +815,11 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str, *, h
     for attempt in range(SEND_ATTEMPTS):
         try:
             if response_id:
-                result = await ctx.crm.send_message(crm_conv_id, text, response_id=response_id, **({"handoff_reason": handoff_reason} if handoff_reason else {}))
+                result = await ctx.crm.send_message(crm_conv_id, text, response_id=response_id, **({"dispatch_id": dispatch_id} if dispatch_id else {}), **({"handoff_reason": handoff_reason} if handoff_reason else {}))
                 if turno is not None and handoff_reason and isinstance(result, dict):
                     turno.handoff_managed = result.get("handoffManaged") is True
             else:
-                await ctx.crm.send_message(crm_conv_id, text)
+                await ctx.crm.send_message(crm_conv_id, text, **({"dispatch_id": dispatch_id} if dispatch_id else {}))
             if pending_id is not None:
                 return await ctx.store.mark_pending_send_delivered(pending_id)
             return True
@@ -840,8 +840,6 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str, *, h
     # Y el despacho que se estaba contestando: el CRM lo exige para responder,
     # y para cuando el worker despierte este turno ya no existe. El turno no lo
     # sabe —recibe conversación y texto—, se lo pide al cliente, que sí.
-    despacho_de = getattr(ctx.crm, "despacho_de", None)
-    dispatch_id = despacho_de(crm_conv_id) if callable(despacho_de) else ""
     if pending_id is None:
         pending_id = await ctx.store.enqueue_pending_send(
             conv_id, crm_conv_id, text, org_id, org_slug, dispatch_id

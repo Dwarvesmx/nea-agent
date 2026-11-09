@@ -294,11 +294,11 @@ class CrmClient:
         data = resp.json()
         return [item for item in data.get("chunks", [])[:6] if isinstance(item, dict) and isinstance(item.get("text"), str)]
 
-    async def send_message(self, conversation_id: str, text: str, *, response_id: str = "", handoff_reason: str = "") -> dict[str, Any]:
+    async def send_message(self, conversation_id: str, text: str, *, dispatch_id: str = "", response_id: str = "", handoff_reason: str = "") -> dict[str, Any]:
         resp = await self._request(
             "POST",
             "/api/bot/messages",
-            json={"conversationId": conversation_id, "text": text, **({"responseId": response_id} if response_id else {}), **({"handoffReason": canonical_handoff_reason(handoff_reason)} if handoff_reason else {})},
+            json={"conversationId": conversation_id, "text": text, **({"dispatchId": dispatch_id} if dispatch_id else {}), **({"responseId": response_id} if response_id else {}), **({"handoffReason": canonical_handoff_reason(handoff_reason)} if handoff_reason else {})},
         )
         if resp.status_code == 409:
             raise CrmConflict(_conflict_code(resp))

@@ -76,9 +76,9 @@ class SenderWorker:
             registrar_despacho(item.crm_conversation_id, item.dispatch_id)
         try:
             if item.response_id:
-                result = await ctx.crm.send_message(item.crm_conversation_id, item.content, response_id=item.response_id, **({"handoff_reason": item.handoff_reason} if item.handoff_reason else {}))
+                result = await ctx.crm.send_message(item.crm_conversation_id, item.content, response_id=item.response_id, **({"dispatch_id": item.dispatch_id} if item.dispatch_id else {}), **({"handoff_reason": item.handoff_reason} if item.handoff_reason else {}))
             else:
-                result = await ctx.crm.send_message(item.crm_conversation_id, item.content)
+                result = await ctx.crm.send_message(item.crm_conversation_id, item.content, **({"dispatch_id": item.dispatch_id} if item.dispatch_id else {}))
         except CrmConflict as exc:
             # ai_paused / window_closed: ya no procede — silencio respetuoso.
             logger.info(
