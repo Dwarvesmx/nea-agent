@@ -468,8 +468,11 @@ class ToolRuntime:
         tz: ZoneInfo | None = None,
         conversacion_reciente: str | None = None,
         etapas: list[str] | None = None,
+        dispatch_id: str | None = None,
     ) -> None:
         self._ctx = ctx
+        self._dispatch_id = dispatch_id
+        self.demo_offer: str | None = None
         # 038 — A qué etapas puede mover al lead (`lead.nextStages`).
         self.etapas: list[str] = list(etapas or [])
         # Lo último que se dijo en la conversación (app/dias.py). None ⇒ no
@@ -487,8 +490,33 @@ class ToolRuntime:
         self.proposed = False
         self.etapa_movida: str | None = None
 
+    def demo_tools(self) -> list[dict[str, Any]]:
+        import os
+        if (os.getenv("DEMO_CONVERSATIONAL_ENABLED") != "true" or not self._dispatch_id
+                or not callable(getattr(self._ctx.crm, "offer_demo", None))):
+            return []
+        return [{"type": "function", "function": {
+            "name": "offer_demo",
+            "description": (
+                "Si el prospecto pide una demostración, recomienda una demo publicada según el giro o nombre. "
+                "Si no sabes el giro, pregúntalo. La herramienta envía una oferta de consentimiento, "
+                "nunca activa una sesión. Si devuelve opciones, usa el nombre o sector exacto al elegir. "
+                "Si no está disponible, no afirmes que se activó."
+            ),
+            "parameters": {"type": "object", "properties": {"sector": {"type": "string"}},
+                           "required": ["sector"], "additionalProperties": False},
+        }}]
+
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         try:
+            if name == "offer_demo":
+                sector = args.get("sector")
+                if not self.demo_tools() or not isinstance(sector, str) or not sector.strip() or len(sector) > 128:
+                    return {"status": "unavailable"}
+                result = await self._ctx.crm.offer_demo(self._crm_conv_id, self._dispatch_id, sector)
+                if result.get("status") == "offered" and isinstance(result.get("message"), str):
+                    self.demo_offer = result["message"]
+                return result
             if name == "coordination_consent" and getattr(self._ctx.crm, "supports_coordination", False):
                 if not isinstance(args.get("consent"), bool):
                     return {"ok": False, "error": "explicit_consent_required"}

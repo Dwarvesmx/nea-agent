@@ -72,3 +72,13 @@ Cierre local coordinado; no desplegado ni validado en WhatsApp real. Recuperaci�
 ## WA-LANZAMIENTO-01 · 2026-11-07
 
 El CRM construye el sobre demo v1 a partir del webhook Zernio firmado y de la sesión asignada. Nea exige cuenta, clase de identidad y correspondencia con el contacto antes del ACK. Una identidad inválida se rechaza y no entra al consumidor comercial. Se reutilizan la cola PostgreSQL y los contratos de sesión, finanzas, generación y salida. Sin migración Nea. La integración con adaptadores controlados, el recorrido y las condiciones de lanzamiento se documentan en [WhatsApp Demo Center](../../vocero-crm-dev/docs/modonext/demo-center/11_WHATSAPP_LANZAMIENTO.md).
+
+### 2026-11-08 — Oferta conversacional local
+
+IMPLEMENTADO LOCALMENTE: herramienta opcional `offer_demo`, habilitada solo con `DEMO_CONVERSATIONAL_ENABLED=true`. Usa el identificador del despacho y conversación recibidos por Nea; el modelo solo propone sector. CRM devuelve una oferta fija y Nea transmite su texto literal. La herramienta no activa la sesión ni declara consentimiento. La selección, identidad firmada y consentimiento se verifican en CRM.
+
+PROBADO: 33 pruebas focalizadas de turno, herramientas y despacho; además, integración sintética CRM–Nea con PostgreSQL descartable y transporte controlado documentada en `vocero-crm-dev/docs/modonext/demo-center/11_WHATSAPP_LANZAMIENTO.md`. Sin despliegue ni llamadas externas. Sigue pendiente la aceptación real y la cobertura adicional de vencimiento e incertidumbre.
+
+2026-11-08 · DEMO-COMERCIAL-CIERRE-01: 33/33 pruebas focalizadas de Nea. CRM acreditó el circuito sintético con PostgreSQL descartable y manejo conservador de avisos. La herramienta no transmite consentimiento del modelo. Sin despliegue ni llamadas facturables. Aceptación real pendiente.
+
+Contraparte local CRM: $sha. Estas fuentes se publican y activan juntas únicamente tras autorización operativa.

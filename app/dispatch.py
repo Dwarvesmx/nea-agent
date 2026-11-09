@@ -333,7 +333,7 @@ async def _procesar(ctx: AppContext, payload: dict[str, Any], *, durable: bool =
     # sepa a quién pasársela si revienta antes de leer el contexto.
     await handle_flush(
         ctx_turno, identity, mensajes, crm_conversation_id=conversation_id,
-        propagate_errors=durable,
+        propagate_errors=durable, dispatch_id=dispatch_id or None,
     )
 
 

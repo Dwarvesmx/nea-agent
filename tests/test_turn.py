@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import httpx
 
 from app.llm import LlmExhausted, LlmReply, ToolCall
 from tests.conftest import FakeLLM, mock_crm_basics, despachar
@@ -187,7 +188,7 @@ async def test_si_la_segunda_tambien_sale_mal_silencio_y_handoff(ctx, client, re
 async def test_handoff_durable_delega_pausa_al_ack_zernio(ctx, client, respx_mock, monkeypatch):
     monkeypatch.setenv("NEA_DURABLE_RESPONSE_IDS", "true")
     routes = mock_crm_basics(respx_mock)
-    routes["messages"].mock(return_value=__import__("httpx").Response(200, json={"messageId":"msg_notice", "handoffManaged":True}))
+    routes["messages"].mock(return_value=httpx.Response(200, json={"messageId":"msg_notice", "handoffManaged":True}))
     ctx.llm.replies = [
         LlmReply(content=None, tool_calls=[ToolCall(id="tc1", name="handoff", arguments={"reason":"cliente"})]),
         LlmReply(content="Te paso con un asesor."),
@@ -198,4 +199,29 @@ async def test_handoff_durable_delega_pausa_al_ack_zernio(ctx, client, respx_moc
     body = json.loads(routes["messages"].calls[0].request.content)
     assert body["handoffReason"] == "cliente"
     assert len(body["responseId"]) == 36
+    assert routes["handoff"].call_count == 0
+
+async def test_offer_demo_sends_only_trusted_context_and_uses_exact_offer(ctx, client, respx_mock, monkeypatch):
+    monkeypatch.setenv("DEMO_CONVERSATIONAL_ENABLED", "true")
+    routes = mock_crm_basics(respx_mock)
+    text = "Puedes probar Pizza Nova. Responde ACEPTO DEMO."
+    offer = respx_mock.post("http://crm.test/api/bot/demo/offer").mock(
+        return_value=httpx.Response(200, json={"status": "offered", "message": text})
+    )
+    ctx.llm.replies = [
+        LlmReply(content="Ya inicié la demo", tool_calls=[
+            ToolCall(id="demo", name="offer_demo", arguments={"sector": "Pizza Nova", "consent": True}),
+        ]),
+    ]
+    result = await despachar(client, ctx, text="Quiero una demo de Pizza Nova")
+    assert result.status_code == 200
+    await asyncio.sleep(0.25)
+    assert offer.call_count == 1
+    body = json.loads(offer.calls[0].request.content)
+    assert set(body) == {"contractVersion", "conversationId", "dispatchId", "sector"}
+    assert body["sector"] == "Pizza Nova"
+    assert body["dispatchId"]
+    assert routes["messages"].call_count == 1
+    sent = json.loads(routes["messages"].calls[0].request.content)
+    assert sent["text"] == text
     assert routes["handoff"].call_count == 0

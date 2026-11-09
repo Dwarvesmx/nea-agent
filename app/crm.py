@@ -198,6 +198,19 @@ class CrmClient:
         # que el CRM despachó, aunque esa persona tenga otra.
         self._conversaciones: dict[str, str] = {}
 
+    async def offer_demo(self, conversation_id: str, dispatch_id: str, sector: str) -> dict[str, Any]:
+        try:
+            response = await self._request("POST", "/api/bot/demo/offer", json={
+                "contractVersion": 1, "conversationId": conversation_id,
+                "dispatchId": dispatch_id, "sector": sector,
+            })
+        except CrmError:
+            return {"status": "unavailable"}
+        if response.status_code != 200:
+            return {"status": "unavailable", "error": _payload(response).get("error")}
+        data = _payload(response)
+        return data if data.get("status") in ("choose", "offered") else {"status": "unavailable"}
+
     async def dispatch_demo(self, *, organization_id: str, session_id: str, operation_key: str, text: str | None = None, action: str = "dispatch") -> dict[str, Any]:
         import hashlib
         from app.demo_session import DemoSessionError

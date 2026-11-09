@@ -117,6 +117,7 @@ class _Turno:
     # El motivo del handoff que este turno ya registró, si registró uno.
     handoff: str | None = None
     handoff_managed: bool = False
+    dispatch_id: str | None = None
 
 
 class TurnoSinCrm(Exception):
@@ -168,6 +169,7 @@ async def handle_flush(
     crm_conversation_id: str | None = None,
     *,
     propagate_errors: bool = False,
+    dispatch_id: str | None = None,
 ) -> None:
     """El turno de un despacho. Sin `propagate_errors`, nunca lanza.
 
@@ -184,7 +186,7 @@ async def handle_flush(
     conversación es. La cola del despacho llama con `propagate_errors`: el
     error sube y es ella la que decide (app/dispatch_worker.py).
     """
-    turno = _Turno(crm_conversation_id=crm_conversation_id or None)
+    turno = _Turno(crm_conversation_id=crm_conversation_id or None, dispatch_id=dispatch_id)
     try:
         async with conversation_lock(ctx, identity):
             await run_turn(ctx, identity, items, turno)
@@ -453,6 +455,7 @@ async def run_turn(
         tz=tz,
         conversacion_reciente=_conversacion_reciente(history),
         etapas=etapas_siguientes(context),
+        dispatch_id=turno.dispatch_id if turno else None,
     )
     try:
         final_text = await _tool_loop(ctx, messages, runtime)
@@ -472,7 +475,7 @@ async def run_turn(
     # tiene, o escribió una nota para sí mismo. Se le pide UNA vez más; si
     # vuelve a salir mal, silencio + handoff error, igual que un LLM caído.
     previos = [m.content for m in recientes if m.role == "assistant"]
-    motivo = _respuesta_invalida(final_text, previos)
+    motivo = None if runtime.demo_offer else _respuesta_invalida(final_text, previos)
     if motivo is not None:
         logger.warning("turno %s: la respuesta %s — pido otra", identity, motivo)
         messages.append({"role": "assistant", "content": final_text})
@@ -498,7 +501,7 @@ async def run_turn(
     # el formato que el lead ve roto (app/formato.py).
     sent = False
     if final_text and final_text.strip():
-        final_text = a_whatsapp(runtime.finalize_reply(final_text.strip()))
+        final_text = runtime.demo_offer or a_whatsapp(runtime.finalize_reply(final_text.strip()))
     if final_text and final_text.strip():
         sent = await _send(ctx, conv.id, str(crm_conv_id), final_text, handoff_reason=runtime.handoff_reason, turno=turno)
         if sent:
@@ -746,7 +749,7 @@ async def _tool_loop(
                     getattr(runtime, "etapas", []),
                 ),
                 getattr(runtime, "_profile", None),
-            ),
+            ) + runtime.demo_tools(),
         )
         if not reply.tool_calls:
             return reply.content  # turno de puro texto
@@ -770,6 +773,8 @@ async def _tool_loop(
         )
         for tc in reply.tool_calls:
             result = await runtime.execute(tc.name, tc.arguments)
+            if runtime.demo_offer:
+                return runtime.demo_offer
             messages.append(
                 {
                     "role": "tool",
