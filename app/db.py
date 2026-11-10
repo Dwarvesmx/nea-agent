@@ -351,6 +351,9 @@ class PgStore(PgDispatchStore):
         assert row is not None
         return row["id"]
 
+    async def has_pending_response(self, response_id: str) -> bool:
+        return bool(await self.pool.fetchval("SELECT EXISTS(SELECT 1 FROM pending_send WHERE response_id=$1)", response_id))
+
     async def due_pending_sends(self, now: datetime) -> list[PendingSend]:
         rows = await self.pool.fetch(
             """

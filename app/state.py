@@ -219,6 +219,7 @@ class Store(Protocol):
         handoff_reason: str = "",
     ) -> int: ...
     async def due_pending_sends(self, now: datetime) -> list[PendingSend]: ...
+    async def has_pending_response(self, response_id: str) -> bool: ...
     async def mark_pending_send_delivered(self, pending_id: int) -> bool: ...
     async def mark_pending_send_abandoned(self, pending_id: int) -> None: ...
     async def reschedule_pending_send(
@@ -386,6 +387,9 @@ class MemoryStore(MemoryDispatchStore):
             handoff_reason=handoff_reason,
         )
         return pid
+
+    async def has_pending_response(self, response_id: str) -> bool:
+        return any(item.response_id == response_id for item in self.pending_sends.values())
 
     async def due_pending_sends(self, now: datetime) -> list[PendingSend]:
         return [

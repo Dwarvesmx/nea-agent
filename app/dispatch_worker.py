@@ -44,6 +44,10 @@ async def drain_one(ctx: Any) -> bool:
                 return
             expires = job.payload.get("expiresAt")
             expired = bool(expires and datetime.fromisoformat(expires.replace("Z", "+00:00")) <= datetime.now(timezone.utc))
+            if job.payload.get("type") == "commercial.resume":
+                if not expired:
+                    await _procesar(ctx, job.payload, durable=True, recovery=job.recovery)
+                return
             if job.recovery or expired:
                 await handoff(ctx, job.payload)
             else:

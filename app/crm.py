@@ -254,7 +254,7 @@ class CrmClient:
         except httpx.HTTPError as exc:
             raise CrmUnreachable(f"error de red hacia el CRM: {exc}") from exc
 
-    async def get_context(self, wa_identity: str) -> dict[str, Any] | None:
+    async def get_context(self, wa_identity: str, *, resume_dispatch: str | None = None) -> dict[str, Any] | None:
         """Contexto conversacional; None si el CRM no la conoce (404).
 
         Por la conversación que trajo el despacho si la hay; si no (el
@@ -266,6 +266,8 @@ class CrmClient:
             if conversation_id
             else {"waIdentity": wa_identity}
         )
+        if resume_dispatch:
+            params["resumeDispatch"] = resume_dispatch
         resp = await self._request("GET", "/api/bot/context", params=params)
         if resp.status_code == 404:
             return None

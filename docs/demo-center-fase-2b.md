@@ -85,3 +85,8 @@ Contraparte local CRM: $sha. Estas fuentes se publican y activan juntas únicame
 # 2026-11-09 — Trazabilidad comercial local
 
 IMPLEMENTADO LOCALMENTE: el cliente comercial transmite `dispatchId` del turno y el reintento durable conserva el identificador de la fila. El CRM incorpora su comprobación y el corte de generación; requiere los cambios coordinados y las migraciones 0042 y 0043 de Vocero. Pruebas focalizadas de Nea: `tests/test_sender.py`, 12 casos aprobados. Sin despliegue, WhatsApp real ni llamadas facturables.
+# Reanudación comercial después de una demo
+
+Nea admite el despacho firmado `commercial.resume` de Vocero, con mensajes recuperados o sin ellos. Solo esta clase de despacho permite una lista vacía. Antes de generar, Nea solicita al CRM el contexto comercial para la generación activa y aplica los controles comerciales vigentes. Utiliza la memoria de Lukas y reconoce el nombre del asistente que terminó, sin incorporar el historial ni el conocimiento de la demo. La respuesta utiliza la cola existente y una clave estable por sesión.
+
+PROBADO localmente en `tests/test_commercial_resume.py` (3/3). Se comprobó el despacho firmado, la continuación con mensajes reales y sin ellos, la deduplicación y el rechazo de un despacho obsoleto. La aceptación por WhatsApp queda pendiente.

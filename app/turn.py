@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -55,6 +55,10 @@ CONTEXT_PAUSE_SECONDS = 1.0  # entre esos intentos
 # Comando de pruebas: reinicia la memoria de ESA conversación. Disponible SOLO
 # para identidades de TESTER_WA_IDS (vacía = comando apagado).
 RESET_COMMANDS = frozenset({"/reset", "#reset"})
+
+
+def _id_respuesta_reanudada(session_id: str) -> str:
+    return str(uuid5(NAMESPACE_URL, "vocero:resume:" + session_id))
 
 
 def _agent_tz(settings: Any) -> ZoneInfo:
@@ -118,6 +122,7 @@ class _Turno:
     handoff: str | None = None
     handoff_managed: bool = False
     dispatch_id: str | None = None
+    commercial_resume: dict[str, Any] | None = None
 
 
 class TurnoSinCrm(Exception):
@@ -170,6 +175,7 @@ async def handle_flush(
     *,
     propagate_errors: bool = False,
     dispatch_id: str | None = None,
+    commercial_resume: dict[str, Any] | None = None,
 ) -> None:
     """El turno de un despacho. Sin `propagate_errors`, nunca lanza.
 
@@ -186,7 +192,8 @@ async def handle_flush(
     conversación es. La cola del despacho llama con `propagate_errors`: el
     error sube y es ella la que decide (app/dispatch_worker.py).
     """
-    turno = _Turno(crm_conversation_id=crm_conversation_id or None, dispatch_id=dispatch_id)
+    turno = _Turno(crm_conversation_id=crm_conversation_id or None, dispatch_id=dispatch_id,
+                   commercial_resume=commercial_resume)
     try:
         async with conversation_lock(ctx, identity):
             await run_turn(ctx, identity, items, turno)
@@ -287,7 +294,7 @@ async def run_turn(
     # mensaje con contenido la reabre en el acto —«¿cuánto cuesta?» merece
     # respuesta aunque llegue a los diez minutos— y, pasado el enfriamiento
     # (STALL_COOLDOWN_HOURS), la reabre cualquiera.
-    if conv.stalled_at is not None:
+    if conv.stalled_at is not None and turno.commercial_resume is None:
         enfriando = utcnow() - conv.stalled_at < timedelta(
             hours=settings.stall_cooldown_hours
         )
@@ -310,7 +317,7 @@ async def run_turn(
     # Un CRM que no contesta no es un «no»: la ráfaga se reintenta
     # (handle_flush). Solo el 404 de verdad termina en silencio.
     try:
-        context = await _fetch_context(ctx, identity)
+        context = await _fetch_context(ctx, identity, turno.dispatch_id if turno.commercial_resume else None)
     except CrmUnreachable as exc:
         raise TurnoSinCrm(str(exc)) from exc
     if context is None:
@@ -327,18 +334,22 @@ async def run_turn(
     if not conversation_info.get("windowOpen", False):
         logger.info("turno %s: ventana de 24 h cerrada — silencio", identity)
         return
+    if turno.commercial_resume and await ctx.store.has_pending_response(
+        _id_respuesta_reanudada(turno.commercial_resume["sessionId"])
+    ):
+        return  # El sender durable conserva el cuerpo original tras un reinicio.
     # Sin despacho (el seguimiento) la conversación del CRM se conoce aquí.
     conv = await _olvidar_si_es_otra(ctx, conv, str(crm_conv_id), identity)
     # Desde aquí el turno es de Nea: si revienta, la red de seguridad de
     # handle_flush sabe a qué conversación del CRM avisarle.
     turno.crm_conversation_id = str(crm_conv_id)
 
-    await ctx.store.update_conversation(
-        conv.id,
-        crm_conversation_id=str(crm_conv_id),
-        last_inbound_at=utcnow(),
-        followup_due_at=None,  # el lead habló: se re-agenda al final del turno
-    )
+    if inbound:
+        await ctx.store.update_conversation(
+            conv.id, crm_conversation_id=str(crm_conv_id), last_inbound_at=utcnow(), followup_due_at=None,
+        )
+    elif turno.commercial_resume:
+        await ctx.store.update_conversation(conv.id, crm_conversation_id=str(crm_conv_id))
 
     # Señal de vida: leído + "escribiendo…" mientras Nea piensa (007).
     # Best-effort absoluto: un fallo aquí jamás afecta el turno.
@@ -361,15 +372,14 @@ async def run_turn(
             parts.append(part.text)
         if part.image_data_uri:
             image_uris.append(part.image_data_uri)
-    if not parts and not image_uris:
+    if not parts and not image_uris and not turno.commercial_resume:
         logger.info("turno %s: nada procesable en la ráfaga — silencio", identity)
         return
 
     user_text = "\n".join(parts)
-    await ctx.store.add_message(
-        conv.id, "user", user_text, wa_message_id=inbound[0].wa_message_id
-    )
-    await _anotar_leidos(ctx, inbound)
+    if parts or image_uris:
+        await ctx.store.add_message(conv.id, "user", user_text, wa_message_id=inbound[0].wa_message_id)
+        await _anotar_leidos(ctx, inbound)
 
     # --- Armar mensajes para el LLM ---------------------------------------
     # ¿El CRM agenda HOY? La respuesta caduca (app/agenda.py): si venció, este
@@ -409,6 +419,16 @@ async def run_turn(
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}] + [
         {"role": m.role, "content": m.content} for m in history
     ]
+    if turno.commercial_resume:
+        messages.append({"role": "system", "content": (
+            "Este turno reanuda la atención comercial de Lukas tras una demo. El nombre del asistente "
+            f"probado es {json.dumps(turno.commercial_resume['assistant'], ensure_ascii=False)}. "
+            "Agradece brevemente la demo si encaja. Responde primero las preguntas o peticiones "
+            "pendientes del cliente, incluida atención humana. Retoma sus necesidades y datos reales "
+            "del historial comercial, sin repetir preguntas ni atribuirle datos ficticios de la demo. "
+            "Si faltan datos, pregunta naturalmente qué le pareció y qué le interesa resolver. "
+            "No ofrezcas otra demo ni inventes hechos."
+        )})
     # Hostilidad sostenida (AC-18): el CONTEO es determinista — el LLM salió
     # flaky contando entre turnos. Al tercer strike: alerta en el turno y
     # handoff garantizado más abajo aunque el modelo no llame la herramienta.
@@ -424,7 +444,7 @@ async def run_turn(
         for m in recientes
         if m.role == "user" and m.id > conv.stall_since_message_id
     ]
-    cerrar_sin_rumbo = streak < 3 and sin_rumbo(
+    cerrar_sin_rumbo = not turno.commercial_resume and streak < 3 and sin_rumbo(
         del_lead,
         conv.phase,
         racha=settings.stall_filler_streak,
@@ -455,7 +475,7 @@ async def run_turn(
         tz=tz,
         conversacion_reciente=_conversacion_reciente(history),
         etapas=etapas_siguientes(context),
-        dispatch_id=turno.dispatch_id if turno else None,
+        dispatch_id=turno.dispatch_id if not turno.commercial_resume else None,
     )
     try:
         final_text = None
@@ -465,6 +485,8 @@ async def run_turn(
         if final_text is None:
             final_text = await _tool_loop(ctx, messages, runtime)
     except LlmExhausted as exc:
+        if turno.commercial_resume:
+            raise
         logger.error(
             "turno %s: LLM agotó reintentos (%s) — silencio + handoff error",
             identity,
@@ -490,6 +512,9 @@ async def run_turn(
         except LlmExhausted:
             final_text = None
         if final_text is None or _respuesta_invalida(final_text, previos):
+            if turno.commercial_resume:
+                logger.warning("La continuación comercial no produjo una respuesta válida")
+                return
             logger.error("turno %s: la segunda respuesta tampoco sirve — silencio + handoff error", identity)
             await _safe_handoff(ctx, str(crm_conv_id), "error", turno)
             await ctx.store.update_conversation(conv.id, phase="cerrada", followup_due_at=None)
@@ -535,7 +560,7 @@ async def run_turn(
     else:
         if runtime.proposed:
             updates["phase"] = "agendando"
-        if sent and not conv.followup_sent and not settings.cloud_mode and not prueba:
+        if sent and (inbound or not turno.commercial_resume) and not conv.followup_sent and not settings.cloud_mode and not prueba:
             updates["followup_due_at"] = utcnow() + timedelta(
                 hours=settings.followup_hours
             )
@@ -650,7 +675,7 @@ async def _run_reset(ctx: AppContext, conv: Any, identity: str) -> None:
         )
 
 
-async def _fetch_context(ctx: AppContext, identity: str) -> dict[str, Any] | None:
+async def _fetch_context(ctx: AppContext, identity: str, resume_dispatch: str | None = None) -> dict[str, Any] | None:
     """El contexto del CRM, o None si el CRM dice que no conoce la conversación.
 
     Lanza `CrmUnreachable` si en el último intento el CRM no contestó (red,
@@ -660,7 +685,7 @@ async def _fetch_context(ctx: AppContext, identity: str) -> dict[str, Any] | Non
     for attempt in range(CONTEXT_ATTEMPTS):
         caida = None
         try:
-            context = await ctx.crm.get_context(identity)
+            context = await ctx.crm.get_context(identity, resume_dispatch=resume_dispatch) if resume_dispatch else await ctx.crm.get_context(identity)
         except CrmUnreachable as exc:
             logger.warning(
                 "context de %s: el CRM no contestó (intento %d): %s",
@@ -798,11 +823,12 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str, *, h
     """Envía vía el CRM. Si el turno agota sus reintentos, la respuesta NO se
     descarta: se encola en pending_send y el SenderWorker la reintenta con
     backoff hasta entregar o agotar 24 h (incidente 2026-08-03)."""
-    durable = os.getenv("NEA_DURABLE_RESPONSE_IDS", "false").lower() == "true"
+    resume = turno.commercial_resume if turno else None
+    durable = bool(resume) or os.getenv("NEA_DURABLE_RESPONSE_IDS", "false").lower() == "true"
     handoff_reason = handoff_reason if durable and not getattr(ctx.settings, "cloud_mode", False) else None
     if turno is not None and handoff_reason:
         turno.handoff_managed = True  # El propósito viaja en la misma intención durable.
-    response_id = str(uuid4()) if durable else ""
+    response_id = _id_respuesta_reanudada(resume["sessionId"]) if resume else str(uuid4()) if durable else ""
     despacho_de = getattr(ctx.crm, "despacho_de", None)
     dispatch_id = (turno.dispatch_id if turno else None) or (despacho_de(crm_conv_id) if callable(despacho_de) else "")
     pending_id = None

@@ -166,13 +166,23 @@ async def recibir(request: Request) -> Any:
     if payload.get("type") == EVENTO_OLVIDO:
         return await _recibir_olvido(ctx, payload)
 
+    resume = payload.get("type") == "commercial.resume"
     try:
         valid = (isinstance(payload.get("dispatchId"), str) and 0 < len(payload["dispatchId"]) <= 128
             and isinstance(payload.get("conversation"), dict) and isinstance(payload["conversation"].get("id"), str)
             and 0 < len(payload["conversation"]["id"]) <= 128
             and isinstance(payload.get("contact"), dict) and isinstance(payload["contact"].get("identity"), str)
-            and isinstance(payload.get("messages"), list) and 0 < len(payload["messages"]) <= 100
+            and isinstance(payload.get("messages"), list) and (resume or bool(payload["messages"])) and len(payload["messages"]) <= 100
             and isinstance(payload.get("organization", {}), dict))
+        if resume:
+            meta = payload.get("resume")
+            valid = (valid and not has_demo_scope(payload) and isinstance(meta, dict)
+                and _texto(meta.get("sessionId")) and payload["dispatchId"] == "resume:" + meta["sessionId"]
+                and type(meta.get("generation")) is int and meta["generation"] > 0
+                and _texto(meta.get("assistant")) and payload["conversation"].get("channel") == "whatsapp"
+                and not payload["conversation"].get("test") and not ctx.settings.multi_org)
+        elif str(payload.get("dispatchId", "")).startswith("resume:"):
+            valid = False
         if payload.get("expiresAt"):
             from datetime import datetime
             expiry = datetime.fromisoformat(payload["expiresAt"].replace("Z", "+00:00"))
@@ -255,18 +265,21 @@ async def olvidar(ctx: AppContext, payload: dict[str, Any]) -> None:
     )
 
 
-async def _procesar(ctx: AppContext, payload: dict[str, Any], *, durable: bool = False) -> None:
+async def _procesar(ctx: AppContext, payload: dict[str, Any], *, durable: bool = False, recovery: bool = False) -> None:
     if has_demo_scope(payload):
         raise ValueError("demo_must_not_enter_commercial_processor")
     dispatch_id = str(payload.get("dispatchId") or "")
     conversation = payload.get("conversation") or {}
     conversation_id = str(conversation.get("id") or "")
+    resume = payload["resume"] if payload.get("type") == "commercial.resume" else None
 
     mensajes = mensajes_del_despacho(payload)
-    if not mensajes or not conversation_id:
+    if (not mensajes and not resume) or not conversation_id:
         logger.warning("despacho %s sin mensajes o sin conversación", dispatch_id)
         return
-    identity = mensajes[0].identity
+    identity = mensajes[0].identity if mensajes else str((payload.get("contact") or {}).get("identity") or "")
+    if not identity:
+        return
 
     # Dedup por despacho: el CRM reintenta el DESPACHO entero cuando no le
     # acusamos recibo. Marcar aquí sus mensajes uno por uno dejaría pasar el
@@ -299,7 +312,7 @@ async def _procesar(ctx: AppContext, payload: dict[str, Any], *, durable: bool =
             len(mensajes) - len(nuevos),
             len(nuevos),
         )
-        if not nuevos:
+        if not nuevos and not (resume and recovery):
             return
         mensajes = nuevos
 
@@ -333,7 +346,7 @@ async def _procesar(ctx: AppContext, payload: dict[str, Any], *, durable: bool =
     # sepa a quién pasársela si revienta antes de leer el contexto.
     await handle_flush(
         ctx_turno, identity, mensajes, crm_conversation_id=conversation_id,
-        propagate_errors=durable, dispatch_id=dispatch_id or None,
+        propagate_errors=durable, dispatch_id=dispatch_id or None, commercial_resume=resume,
     )
 
 
