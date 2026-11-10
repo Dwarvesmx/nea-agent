@@ -14,6 +14,8 @@ nunca tumba el turno.
 from __future__ import annotations
 
 import logging
+import re
+from unicodedata import normalize
 from datetime import date, datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -30,6 +32,11 @@ from app.profile import BusinessProfile
 from app.state import AppContext, Conversation, OfferedSlot
 
 logger = logging.getLogger("nea.tools")
+
+
+def _terminos_demo(texto: str) -> set[str]:
+    palabras = re.findall(r"[a-z0-9]+", normalize("NFKD", texto.lower()).encode("ascii", "ignore").decode())
+    return {p.removesuffix("s") if len(p) > 4 else p for p in palabras if len(p) > 2}
 
 # Cuántos huecos quedan RESERVABLES tras un propose_slots. El agente muestra 3
 # a la vez (regla del prompt), pero guardar solo 3 lo dejaba sin nada que
@@ -498,15 +505,39 @@ class ToolRuntime:
         return [{"type": "function", "function": {
             "name": "offer_demo",
             "description": (
-                "Si el prospecto pide una demostración, consulta primero el catálogo elegible "
-                "llamando sin argumentos. Interpreta su necesidad y selecciona el identificador "
-                "id de una opción devuelta, enviándolo en sector. Si hay ambigüedad, pregunta. "
-                "La oferta pide consentimiento. Si no hay opciones, no inventes asistentes."
+                "Consulta el catálogo sin argumentos cuando el prospecto pida una demo o "
+                "describa una necesidad concreta que pueda probar con un asistente. Si hay una "
+                "opción compatible, envía su id en sector para ofrecerla, aunque el prospecto "
+                "no haya pedido una demo expresamente. Si hay ambigüedad, pregunta. Si el catálogo "
+                "está vacío o el CRM rechaza la oferta, sigue atendiendo la consulta comercial "
+                "sin inventar opciones, prometer una demo o derivar a un asesor por ese solo motivo. La oferta solicita consentimiento "
+                "al prospecto y el CRM decide si puede iniciar la sesión."
             ),
             "parameters": {"type": "object", "properties": {
                 "sector": {"type": "string", "description": "Identificador de la opción del catálogo. Omite para consultar."}
             }, "additionalProperties": False},
         }}]
+
+    async def ofrecer_demo_explicita(self, texto: str) -> str | None:
+        # Solo resolvemos solicitudes directas con una coincidencia inequívoca del catálogo.
+        solicitud = re.search(r"\bquiero probar (?:la |una )?demo(?:straci[oó]n)? de\s+([^.!?]+)[.!?]*\s*$", texto, re.IGNORECASE)
+        if not solicitud or re.search(r"\b(?:no|asesor|humano|persona)\b", texto, re.IGNORECASE) or not self.demo_tools():
+            return None
+        tema = _terminos_demo(solicitud[1])
+        if not tema:
+            return None
+        catalogo = await self.execute("offer_demo", {})
+        opciones = catalogo.get("options")
+        if catalogo.get("status") != "choose" or not isinstance(opciones, list):
+            return None
+        coincidencias = [
+            opcion["id"] for opcion in opciones
+            if isinstance(opcion, dict) and isinstance(opcion.get("id"), str)
+            and tema <= _terminos_demo(" ".join(str(opcion.get(campo, "")) for campo in ("demo", "sector", "assistant", "commercialName")))
+        ]
+        if len(coincidencias) == 1:
+            await self.execute("offer_demo", {"sector": coincidencias[0]})
+        return self.demo_offer
 
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         try:

@@ -235,3 +235,56 @@ async def test_offer_demo_catalog_omits_selection(ctx, respx_mock):
     assert json.loads(route.calls[0].request.content) == {
         "contractVersion": 1, "conversationId": "conv-1", "dispatchId": "dispatch-1",
     }
+
+
+async def test_offer_demo_recommends_published_assistant_for_business_need(ctx, client, respx_mock, monkeypatch):
+    monkeypatch.setenv("DEMO_CONVERSATIONAL_ENABLED", "true")
+    routes = mock_crm_basics(respx_mock)
+    text = "Puedes probar Taller Aurora. Responde ACEPTO DEMO."
+    offer = respx_mock.post("http://crm.test/api/bot/demo/offer").mock(side_effect=[
+        httpx.Response(200, json={"status": "choose", "options": [
+            {"id": "published-automotive", "demo": "Taller Aurora", "sector": "Servicios automotrices"},
+        ]}),
+        httpx.Response(200, json={"status": "offered", "message": text}),
+    ])
+    ctx.llm.replies = [
+        LlmReply(content="", tool_calls=[ToolCall(id="catalog", name="offer_demo", arguments={})]),
+        LlmReply(content="", tool_calls=[ToolCall(id="select", name="offer_demo", arguments={"sector": "published-automotive"})]),
+    ]
+
+    response = await despachar(client, ctx, text="Tengo un taller y pierdo citas porque no alcanzo a contestar WhatsApp")
+    assert response.status_code == 200
+    await asyncio.sleep(0.25)
+
+    catalog, selection = [json.loads(call.request.content) for call in offer.calls]
+    assert "sector" not in catalog
+    assert selection == {**catalog, "sector": "published-automotive"}
+    assert routes["messages"].call_count == 1
+    assert json.loads(routes["messages"].calls[0].request.content)["text"] == text
+    assert routes["handoff"].call_count == 0
+
+
+async def test_explicit_demo_offer_does_not_depend_on_model_handoff(ctx, client, respx_mock, monkeypatch):
+    monkeypatch.setenv("DEMO_CONVERSATIONAL_ENABLED", "true")
+    routes = mock_crm_basics(respx_mock)
+    text = "Puedes probar Pizzería Demo ModoNext con NOVA. Responde ACEPTO DEMO."
+    offer = respx_mock.post("http://crm.test/api/bot/demo/offer").mock(side_effect=[
+        httpx.Response(200, json={"status": "choose", "options": [
+            {"id": "published-pizza", "demo": "Pizzería Demo ModoNext", "commercialName": "Pizza Nova", "sector": "Restaurante"},
+            {"id": "published-home", "demo": "Demo inmobiliaria", "commercialName": "Casa Horizonte", "sector": "Inmobiliaria"},
+        ]}),
+        httpx.Response(200, json={"status": "offered", "message": text}),
+    ])
+    ctx.llm.replies = [LlmReply(content="Te paso con un asesor", tool_calls=[
+        ToolCall(id="handoff", name="handoff", arguments={"reason": "lead_request"}),
+    ])]
+
+    response = await despachar(client, ctx, esperar=True, text="Lukas quiero probar la demo de pizzas")
+    assert response.status_code == 200
+    catalog, selection = [json.loads(call.request.content) for call in offer.calls]
+    assert "sector" not in catalog
+    assert selection == {**catalog, "sector": "published-pizza"}
+    assert ctx.llm.calls == []
+    assert routes["handoff"].call_count == 0
+    assert routes["messages"].call_count == 1
+    assert json.loads(routes["messages"].calls[0].request.content)["text"] == text

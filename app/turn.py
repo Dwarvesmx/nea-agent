@@ -458,7 +458,12 @@ async def run_turn(
         dispatch_id=turno.dispatch_id if turno else None,
     )
     try:
-        final_text = await _tool_loop(ctx, messages, runtime)
+        final_text = None
+        if (streak < 3 and not cerrar_sin_rumbo and len(inbound) == 1
+                and inbound[0].channel == "whatsapp" and not inbound[0].prueba):
+            final_text = await runtime.ofrecer_demo_explicita(inbound[0].text or "")
+        if final_text is None:
+            final_text = await _tool_loop(ctx, messages, runtime)
     except LlmExhausted as exc:
         logger.error(
             "turno %s: LLM agotó reintentos (%s) — silencio + handoff error",
