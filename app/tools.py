@@ -498,20 +498,21 @@ class ToolRuntime:
         return [{"type": "function", "function": {
             "name": "offer_demo",
             "description": (
-                "Si el prospecto pide una demostración, recomienda una demo publicada según el giro o nombre. "
-                "Si no sabes el giro, pregúntalo. La herramienta envía una oferta de consentimiento, "
-                "nunca activa una sesión. Si devuelve opciones, usa el nombre o sector exacto al elegir. "
-                "Si no está disponible, no afirmes que se activó."
+                "Si el prospecto pide una demostración, consulta primero el catálogo elegible "
+                "llamando sin argumentos. Interpreta su necesidad y selecciona el identificador "
+                "id de una opción devuelta, enviándolo en sector. Si hay ambigüedad, pregunta. "
+                "La oferta pide consentimiento. Si no hay opciones, no inventes asistentes."
             ),
-            "parameters": {"type": "object", "properties": {"sector": {"type": "string"}},
-                           "required": ["sector"], "additionalProperties": False},
+            "parameters": {"type": "object", "properties": {
+                "sector": {"type": "string", "description": "Identificador de la opción del catálogo. Omite para consultar."}
+            }, "additionalProperties": False},
         }}]
 
     async def execute(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         try:
             if name == "offer_demo":
                 sector = args.get("sector")
-                if not self.demo_tools() or not isinstance(sector, str) or not sector.strip() or len(sector) > 128:
+                if not self.demo_tools() or (sector is not None and (not isinstance(sector, str) or not sector.strip() or len(sector) > 128)):
                     return {"status": "unavailable"}
                 result = await self._ctx.crm.offer_demo(self._crm_conv_id, self._dispatch_id, sector)
                 if result.get("status") == "offered" and isinstance(result.get("message"), str):

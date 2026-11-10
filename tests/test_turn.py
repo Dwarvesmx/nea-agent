@@ -225,3 +225,13 @@ async def test_offer_demo_sends_only_trusted_context_and_uses_exact_offer(ctx, c
     sent = json.loads(routes["messages"].calls[0].request.content)
     assert sent["text"] == text
     assert routes["handoff"].call_count == 0
+
+async def test_offer_demo_catalog_omits_selection(ctx, respx_mock):
+    options = [{"id": "published-1", "demo": "Demo publicada", "sector": "Servicios"}]
+    route = respx_mock.post("http://crm.test/api/bot/demo/offer").mock(
+        return_value=httpx.Response(200, json={"status": "choose", "options": options})
+    )
+    assert await ctx.crm.offer_demo("conv-1", "dispatch-1") == {"status": "choose", "options": options}
+    assert json.loads(route.calls[0].request.content) == {
+        "contractVersion": 1, "conversationId": "conv-1", "dispatchId": "dispatch-1",
+    }

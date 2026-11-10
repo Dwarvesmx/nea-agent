@@ -198,11 +198,11 @@ class CrmClient:
         # que el CRM despachó, aunque esa persona tenga otra.
         self._conversaciones: dict[str, str] = {}
 
-    async def offer_demo(self, conversation_id: str, dispatch_id: str, sector: str) -> dict[str, Any]:
+    async def offer_demo(self, conversation_id: str, dispatch_id: str, sector: str | None = None) -> dict[str, Any]:
         try:
             response = await self._request("POST", "/api/bot/demo/offer", json={
                 "contractVersion": 1, "conversationId": conversation_id,
-                "dispatchId": dispatch_id, "sector": sector,
+                "dispatchId": dispatch_id, **({"sector": sector} if sector is not None else {}),
             })
         except CrmError:
             return {"status": "unavailable"}
