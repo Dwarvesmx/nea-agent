@@ -4,6 +4,18 @@ import httpx
 from app.tools import ToolRuntime
 from app.state import Conversation
 from app.crm import CrmClient
+from app.profile import BusinessProfile
+from app.prompt import build_system_prompt
+
+
+def test_sin_agenda_comercial_no_impone_handoff_al_comprar():
+    kwargs = dict(profile=BusinessProfile(), context=None, conv=Conversation(1, "fixture"), agenda=False)
+    actual = build_system_prompt(**kwargs, comercial=True)
+    anterior = build_system_prompt(**kwargs)
+    assert "cuando el lead quiera avanzar, haz handoff" not in actual
+    assert "consulta el catálogo" in actual
+    assert "solicita aprobación interna" in actual
+    assert "cuando el lead quiera avanzar, haz handoff" in anterior
 
 
 async def test_registro_opcional_y_contexto_fijado(respx_mock):

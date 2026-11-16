@@ -402,6 +402,7 @@ def build_system_prompt(
     tz: ZoneInfo | None = None,
     recordatorios: bool = False,
     canal: str | None = None,
+    comercial: bool = False,
 ) -> str:
     """Chasis + perfil del negocio + bloque de contexto vivo de esta conversación.
 
@@ -419,11 +420,21 @@ def build_system_prompt(
         # El CRM de esta instancia no agenda (Vocero trae el motor detrás de
         # una bandera). Sin esto el agente sigue prometiendo cita y el lead se
         # topa con una puerta cerrada al final de la conversación.
-        lines.append(
-            "- ESTE NEGOCIO NO AGENDA POR AQUÍ: no ofrezcas horarios ni "
-            "prometas una cita. Resuelve lo que puedas y, cuando el lead "
-            "quiera avanzar, haz handoff para que lo coordine una persona."
-        )
+        if comercial:
+            lines.append(
+                "- ESTE NEGOCIO NO AGENDA POR AQUÍ: no ofrezcas horarios ni "
+                "prometas una cita. Si pide una cita, coordínala con una persona. "
+                "Para cotizar o contratar, utiliza las herramientas comerciales "
+                "disponibles sin transferir automáticamente: consulta el catálogo, "
+                "prepara la propuesta y solicita aprobación interna si está pendiente. "
+                "Confirma el resultado real antes de afirmar que fue registrada."
+            )
+        else:
+            lines.append(
+                "- ESTE NEGOCIO NO AGENDA POR AQUÍ: no ofrezcas horarios ni "
+                "prometas una cita. Resuelve lo que puedas y, cuando el lead "
+                "quiera avanzar, haz handoff para que lo coordine una persona."
+            )
     lines.append(f"- Fecha y hora del negocio: {_fmt_local(now, tz)}.")
     if agenda:
         # Con solo «(America/Mexico_City)» junto a la hora, el modelo dedujo

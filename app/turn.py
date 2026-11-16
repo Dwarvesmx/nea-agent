@@ -390,6 +390,11 @@ async def run_turn(
     # La zona es la del negocio de ESTE turno (la manda el CRM), no la de la
     # instancia: una Nea atiende a negocios de zonas distintas.
     tz = zona_del_negocio(context, _agent_tz(settings))
+    comercial_disponible = bool(
+        os.getenv("NEA_COMERCIAL_V1_ENABLED") == "true"
+        and not prueba and not getattr(settings, "cloud_mode", False)
+        and turno and turno.dispatch_id and inbound and inbound[-1].wa_message_id
+    )
     system = build_system_prompt(
         profile=profile,
         context=context,
@@ -400,6 +405,7 @@ async def run_turn(
         tz=tz,
         recordatorios=bool(getattr(ctx.crm, "supports_agenda_v2", False)),
         canal=next((m.channel for m in inbound if m.channel), None),
+        comercial=comercial_disponible,
     )
     # Se traen más mensajes de los que ve el LLM: el candado de cierre cuenta
     # el hilo COMPLETO del lead, no solo la ventana de contexto.
@@ -458,8 +464,7 @@ async def run_turn(
         etapas=etapas_siguientes(context),
         dispatch_id=turno.dispatch_id if turno else None,
         comercial_inbound_id=inbound[-1].wa_message_id if inbound else None,
-        comercial_enabled=(os.getenv("NEA_COMERCIAL_V1_ENABLED") == "true"
-                           and not prueba and not getattr(settings, "cloud_mode", False)),
+        comercial_enabled=comercial_disponible,
     )
     try:
         final_text = None
