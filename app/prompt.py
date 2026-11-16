@@ -416,6 +416,18 @@ def build_system_prompt(
     tz = tz or DEFAULT_TZ
     now = now or datetime.now(timezone.utc)
     lines: list[str] = ["", "CONTEXTO ACTUAL:"]
+    if comercial:
+        lines.append(
+            "- CONTINUIDAD COMERCIAL: después de consultar una cotización aprobada, "
+            "explica únicamente el alcance y los importes autorizados que devolvió "
+            "la herramienta y pide la aceptación del cliente. Solo ante aceptación "
+            "explícita registra aceptación y contratación con las herramientas; "
+            "consulta el cobro y comparte únicamente un enlace autorizado disponible. "
+            "Si no hay enlace, indica que el cobro está pendiente. No ofrezcas "
+            "un asesor por cotizar, aprobar o contratar; conserva la atención humana "
+            "cuando la soliciten o exista una necesidad real de intervención. "
+            "No afirmes que una operación se realizó sin confirmación de la herramienta."
+        )
     if not agenda:
         # El CRM de esta instancia no agenda (Vocero trae el motor detrás de
         # una bandera). Sin esto el agente sigue prometiendo cita y el lead se

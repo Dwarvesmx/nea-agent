@@ -18,6 +18,18 @@ def test_sin_agenda_comercial_no_impone_handoff_al_comprar():
     assert "cuando el lead quiera avanzar, haz handoff" in anterior
 
 
+def test_continuidad_comercial_no_inventa_aceptacion_o_enlace():
+    for agenda in (True, False):
+        prompt = build_system_prompt(profile=BusinessProfile(), context=None,
+            conv=Conversation(1, "fixture"), agenda=agenda, comercial=True)
+        assert "Solo ante aceptación explícita" in prompt
+        assert "únicamente un enlace autorizado disponible" in prompt
+        assert "No ofrezcas un asesor" in prompt
+    otro = build_system_prompt(profile=BusinessProfile(), context=None,
+        conv=Conversation(1, "fixture"), comercial=False)
+    assert "CONTINUIDAD COMERCIAL" not in otro
+
+
 async def test_registro_opcional_y_contexto_fijado(respx_mock):
     crm = CrmClient("http://crm.test", "synthetic-commercial-key")
     ctx = SimpleNamespace(crm=crm)
