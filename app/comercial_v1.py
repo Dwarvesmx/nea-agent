@@ -20,7 +20,7 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
 TOOL_SCHEMAS = [
     _tool("comercial_catalogo", "Consulta productos, extras compatibles y condiciones. Orientativo o pendiente no es un precio final autorizado. También recupera las cotizaciones de esta conversación para retomar su id y versión.", {}, []),
     _tool("comercial_preparar", "Prepara cotización con precios calculados por servidor. Solo comunicar como oferta final si estado=aprobada. Si pendiente, es propuesta interna, solicita aprobación y conserva cotizacionId/version.", {"conceptos": {"type": "array", "items": _LINE, "minItems": 1, "maxItems": 40}, "especial": {"type": "string"}}, ["conceptos"]),
-    _tool("comercial_solicitar_aprobacion", "Registra solicitud interna; no transfiere ni notifica proactivamente. Retoma al próximo mensaje consultando esta cotización.", _REF, ["cotizacionId", "version"]),
+    _tool("comercial_solicitar_aprobacion", "Registra solicitud interna sin transferir. Pregunta si desea aviso de autorización por este WhatsApp. Solo si responde explícitamente «Sí, avísame cuando mi cotización esté autorizada», usa avisar=true; el servidor verifica su mensaje.", {**_REF, "avisar": {"type": "boolean"}}, ["cotizacionId", "version"]),
     _tool("comercial_consultar_aprobacion", "Recupera versión y decisión actual de la cotización del prospecto, sin cambiarla.", {"cotizacionId": {"type": "string"}}, ["cotizacionId"]),
     _tool("comercial_aceptar", "Registra aceptación explícita del cliente en su mensaje actual para la versión aprobada indicada. No implica pago.", _REF, ["cotizacionId", "version"]),
     _tool("comercial_contratar", "Crea contratación única de la cotización aceptada; inicialmente pendiente de pago.", _REF, ["cotizacionId", "version"]),
@@ -62,7 +62,9 @@ class ComercialTools:
                 if action == "preparar":
                     body["propuesta"] = args
                 else:
-                    body.update(args)
+                    body.update({k:v for k,v in args.items() if k != "avisar"})
+                    if action == "solicitar_aprobacion" and args.get("avisar") is True:
+                        body["mensajeAvisoId"] = self.inbound_message_id
                 if action == "aceptar":
                     body["mensajeId"] = self.inbound_message_id
                 response = await self.crm._request("POST", "/api/bot/comercial", json=body)

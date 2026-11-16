@@ -8,6 +8,20 @@ from app.profile import BusinessProfile
 from app.prompt import build_system_prompt
 
 
+async def test_aviso_inyecta_solo_mensaje_del_turno(respx_mock):
+    import json
+    crm = CrmClient("http://crm.test", "synthetic-commercial-key")
+    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"estado":"pendiente"}))
+    runtime = ToolRuntime(SimpleNamespace(crm=crm),Conversation(1,"fixture"),"trusted",
+        tz=ZoneInfo("UTC"),dispatch_id="dispatch",comercial_inbound_id="consent-real",comercial_enabled=True)
+    assert (await runtime.execute_comercial("comercial_solicitar_aprobacion",{"cotizacionId":"q","version":1,"avisar":True},"consent"))["ok"]
+    body=json.loads(route.calls[0].request.content)
+    assert body["mensajeAvisoId"]=="consent-real"
+    assert "avisar" not in body
+    assert not (await runtime.execute_comercial("comercial_solicitar_aprobacion",{"cotizacionId":"q","version":1,"mensajeAvisoId":"otro"},"spoof"))["ok"]
+    await crm.aclose()
+
+
 def test_sin_agenda_comercial_no_impone_handoff_al_comprar():
     kwargs = dict(profile=BusinessProfile(), context=None, conv=Conversation(1, "fixture"), agenda=False)
     actual = build_system_prompt(**kwargs, comercial=True)
