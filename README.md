@@ -453,3 +453,8 @@ que definen la personalidad:
 ## Licencia
 
 [MIT](LICENSE) — igual que Vocero. Úsalo, véndelo instalado, modifícalo.
+# Integración Comercial V1 (opcional)
+
+El registro preparado de Comercial V1 se conecta a `ToolRuntime` y al loop de herramientas mediante `NEA_COMERCIAL_V1_ENABLED=true`, apagado por defecto. Solo se ofrece en turnos comerciales estándar con despacho y mensaje CRM identificados; no en Laboratorio, sesiones demo o modo cloud. Usa el cliente CRM existente, sin proveedor, credenciales o migraciones nuevos. CRM debe tener `COMERCIAL_V1_ENABLED`, `COMERCIAL_BOT_ENABLED` y su `COMERCIAL_BOT_ORG_ID` autorizados. La clave de bot existente conserva su función de transporte; las herramientas no reciben permisos administrativos.
+
+Se conservan perfil, conocimiento, prompt, modelos, canales y herramientas previas. La conversación y mensaje son del despacho, nunca argumentos elegidos por el modelo; despacho + ID de llamada hacen idempotente la operación. El catálogo permite recuperar las cotizaciones de la misma conversación al siguiente turno. Deshabilitar la bandera retira estas ocho herramientas sin revertir el CRM ni sus datos. Prueba focalizada: `pytest tests/test_comercial_runtime.py tests/test_tools.py tests/test_turn.py`; `tests/comercial_http_probe.py` ejecuta los tres recorridos con el arnés PostgreSQL/Next descartable ya existente del CRM, sin mocks de sus APIs ni clientes reales.

@@ -27,6 +27,7 @@ from app.crm import (
     SlotNotOffered,
     SlotTaken,
 )
+from app.comercial_v1 import ComercialTools
 from app.dias import nombra_un_dia
 from app.profile import BusinessProfile
 from app.state import AppContext, Conversation, OfferedSlot
@@ -476,6 +477,8 @@ class ToolRuntime:
         conversacion_reciente: str | None = None,
         etapas: list[str] | None = None,
         dispatch_id: str | None = None,
+        comercial_inbound_id: str | None = None,
+        comercial_enabled: bool = False,
     ) -> None:
         self._ctx = ctx
         self._dispatch_id = dispatch_id
@@ -487,6 +490,10 @@ class ToolRuntime:
         self._conversacion_reciente = conversacion_reciente
         self._conv = conv
         self._crm_conv_id = crm_conversation_id
+        self._comercial = ComercialTools(
+            ctx.crm, crm_conversation_id, dispatch_id or "", comercial_inbound_id or "",
+            enabled=bool(comercial_enabled and dispatch_id and comercial_inbound_id),
+        )
         self._profile = profile or BusinessProfile()
         self._tz = tz or _zona_del_negocio(ctx)
         # Efectos observables por turn.py:
@@ -496,6 +503,12 @@ class ToolRuntime:
         self.routed_out = False
         self.proposed = False
         self.etapa_movida: str | None = None
+
+    def comercial_tools(self) -> list[dict[str, Any]]:
+        return self._comercial.schemas()
+
+    async def execute_comercial(self, name: str, args: dict[str, Any], tool_call_id: str) -> dict[str, Any]:
+        return await self._comercial.execute(name, args, tool_call_id)
 
     def demo_tools(self) -> list[dict[str, Any]]:
         import os

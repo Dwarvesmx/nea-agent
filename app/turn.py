@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator
 from zoneinfo import ZoneInfo
 
 from app import media
+from app.comercial_v1 import NAMES as COMERCIAL_TOOLS
 from app.agenda import agenda_vigente
 from app.config import canonical_identity
 from app.crm import CrmConflict, CrmError, CrmUnreachable
@@ -456,6 +457,9 @@ async def run_turn(
         conversacion_reciente=_conversacion_reciente(history),
         etapas=etapas_siguientes(context),
         dispatch_id=turno.dispatch_id if turno else None,
+        comercial_inbound_id=inbound[-1].wa_message_id if inbound else None,
+        comercial_enabled=(os.getenv("NEA_COMERCIAL_V1_ENABLED") == "true"
+                           and not prueba and not getattr(settings, "cloud_mode", False)),
     )
     try:
         final_text = None
@@ -754,7 +758,7 @@ async def _tool_loop(
                     getattr(runtime, "etapas", []),
                 ),
                 getattr(runtime, "_profile", None),
-            ) + runtime.demo_tools(),
+            ) + runtime.demo_tools() + runtime.comercial_tools(),
         )
         if not reply.tool_calls:
             return reply.content  # turno de puro texto
@@ -777,7 +781,10 @@ async def _tool_loop(
             }
         )
         for tc in reply.tool_calls:
-            result = await runtime.execute(tc.name, tc.arguments)
+            if tc.name in COMERCIAL_TOOLS:
+                result = await runtime.execute_comercial(tc.name, tc.arguments, tc.id)
+            else:
+                result = await runtime.execute(tc.name, tc.arguments)
             if runtime.demo_offer:
                 return runtime.demo_offer
             messages.append(
