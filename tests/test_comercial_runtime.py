@@ -8,6 +8,15 @@ from app.profile import BusinessProfile
 from app.prompt import build_system_prompt
 
 
+def test_intencion_confirmada_y_extra_pendiente_no_bloquean_propuesta():
+    prompt=build_system_prompt(profile=BusinessProfile(),context=None,
+        conv=Conversation(1,'cafeteria'),agenda=False,comercial=True)
+    assert 'no vuelvas a preguntar si quiere avanzar' in prompt
+    assert 'ejecuta comercial_preparar en este turno' in prompt
+    assert 'conserva su alcance en especial' in prompt
+    assert 'cotizacionId real' in prompt
+
+
 async def test_aviso_inyecta_solo_mensaje_del_turno(respx_mock):
     import json
     crm = CrmClient("http://crm.test", "synthetic-commercial-key")

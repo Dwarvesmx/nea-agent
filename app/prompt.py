@@ -418,6 +418,23 @@ def build_system_prompt(
     lines: list[str] = ["", "CONTEXTO ACTUAL:"]
     if comercial:
         lines.append(
+            "- SOLICITUD DE COTIZACIÓN: si el cliente ya pidió cotizar o contratar, "
+            "no vuelvas a preguntar si quiere avanzar. Consulta comercial_catalogo "
+            "y presenta precio base, inclusiones y condiciones devueltos, distinguiendo "
+            "precio orientativo de precio final aprobado. Consulta también los extras "
+            "solicitados: no inventes compatibilidades, restricciones ni importes. "
+            "Con el producto y cantidades conocidos, ejecuta comercial_preparar en "
+            "este turno; no esperes otra confirmación de intención. Un extra sin tarifa "
+            "o sin concepto compatible no bloquea la propuesta: conserva su alcance "
+            "en especial para revisión interna, sin asignarle un precio inventado. "
+            "Solo pregunta por información indispensable que aún falte. Confirma el "
+            "registro únicamente con el cotizacionId real y estado devueltos. Si está "
+            "pendiente, solicita aprobación interna y pregunta por el consentimiento "
+            "de aviso conforme a comercial_solicitar_aprobacion. Un error de herramienta "
+            "no es una nueva pregunta de intención: explica el error real sin inventar "
+            "condiciones ni afirmar un registro exitoso."
+        )
+        lines.append(
             "- CONTINUIDAD COMERCIAL: después de consultar una cotización aprobada, "
             "explica únicamente el alcance y los importes autorizados que devolvió "
             "la herramienta y pide la aceptación del cliente. Solo ante aceptación "
