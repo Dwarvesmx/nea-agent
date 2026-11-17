@@ -507,6 +507,9 @@ class ToolRuntime:
     def comercial_tools(self) -> list[dict[str, Any]]:
         return self._comercial.schemas()
 
+    def comercial_respuesta(self, text: str | None) -> str | None:
+        return self._comercial.respuesta_verificada(text) if self._comercial.enabled else text
+
     async def execute_comercial(self, name: str, args: dict[str, Any], tool_call_id: str) -> dict[str, Any]:
         return await self._comercial.execute(name, args, tool_call_id)
 

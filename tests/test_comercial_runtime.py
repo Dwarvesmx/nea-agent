@@ -63,7 +63,7 @@ async def test_registro_opcional_y_contexto_fijado(respx_mock):
     on = ToolRuntime(ctx,conv,"trusted",tz=ZoneInfo("UTC"),dispatch_id="dispatch",
                      comercial_inbound_id="inbound",comercial_enabled=True)
     assert len(on.comercial_tools()) == 8
-    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"estado":"aceptada"}))
+    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"aceptada"}))
     for _ in range(2):
         assert (await on.execute_comercial("comercial_aceptar",{"cotizacionId":"q","version":1},"call"))["ok"]
     import json
@@ -103,4 +103,59 @@ async def test_loop_registra_y_ejecuta_herramienta_con_id_real(respx_mock):
     assert await _tool_loop(ctx,[],runtime)=="Propuesta pendiente"
     assert json.loads(route.calls[0].request.content)["requestKey"]==sha256(b"dispatch:call-7").hexdigest()
     assert runtime.handoff_reason is None
+    await crm.aclose()
+
+async def test_cierre_valida_recibos_y_no_contrata_tras_error(respx_mock):
+    from app.comercial_v1 import ComercialTools
+    crm=CrmClient("http://crm.test","synthetic-commercial-key")
+    t=ComercialTools(crm,"conv","dispatch","id-interno",enabled=True)
+    ref={"cotizacionId":"q","version":2}
+    route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(422,json={"error":{"code":"evidencia_aceptacion_invalida"}}))
+    assert not (await t.execute("comercial_contratar",ref,"prematuro"))["ok"]
+    assert not route.called
+    assert not (await t.execute("comercial_aceptar",ref,"acepta"))["ok"]
+    assert not (await t.execute("comercial_contratar",ref,"sin-aceptacion"))["ok"]
+    assert "No se completó" in t.respuesta_verificada("Ya generé tu contratación")
+    route.mock(return_value=httpx.Response(200,json={"estado":"aceptada"}))
+    assert not (await t.execute("comercial_aceptar",ref,"recibo-incompleto"))["ok"]
+    route.mock(return_value=httpx.Response(200,json={**ref,"estado":"aceptada"}))
+    assert (await t.execute("comercial_aceptar",ref,"acepta-valida"))["ok"]
+    route.mock(return_value=httpx.Response(200,json={"pedido":{}}))
+    assert not (await t.execute("comercial_contratar",ref,"sin-pedido"))["ok"]
+    assert "No se completó" in t.respuesta_verificada("Tu pedido está listo")
+    route.mock(return_value=httpx.Response(200,json={"pedido":{"id":"pedido-real","cotizacion_id":"q","version":2,"estado":"pendiente"}}))
+    assert (await t.execute("comercial_contratar",ref,"pedido"))["ok"]
+    assert "pedido-real" in t.respuesta_verificada("Pagado")
+    assert "pago permanece pendiente" in t.respuesta_verificada("Pagado")
+    await crm.aclose()
+
+async def test_loop_no_anuncia_exito_ante_error_o_sin_operacion(respx_mock):
+    from app.turn import _tool_loop
+    crm=CrmClient("http://crm.test","synthetic-commercial-key")
+    respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(422,json={"error":{"code":"evidencia_aceptacion_invalida"}}))
+    class Llm:
+        calls=0
+        async def complete(self,messages,tools):
+            self.calls+=1
+            return SimpleNamespace(content="He registrado la aceptación y generado tu contratación",tool_calls=[] if self.calls>1 else [SimpleNamespace(id="aceptar",name="comercial_aceptar",arguments={"cotizacionId":"q","version":2})])
+    ctx=SimpleNamespace(crm=crm,llm=Llm(),agenda_enabled=False)
+    runtime=ToolRuntime(ctx,Conversation(1,"test"),"trusted",tz=ZoneInfo("UTC"),dispatch_id="d",comercial_inbound_id="id-interno",comercial_enabled=True)
+    assert "No se completó" in await _tool_loop(ctx,[],runtime)
+    ctx.llm.calls=1
+    runtime=ToolRuntime(ctx,Conversation(1,"test"),"trusted",tz=ZoneInfo("UTC"),dispatch_id="d2",comercial_inbound_id="id2",comercial_enabled=True)
+    assert "No tengo confirmación" in await _tool_loop(ctx,[],runtime)
+    await crm.aclose()
+
+async def test_retomar_aceptacion_persistida_y_consultar_pedido(respx_mock):
+    from app.comercial_v1 import ComercialTools
+    from app.dispatch import mensajes_del_despacho
+    inbound=mensajes_del_despacho({"contact":{"identity":"fixture"},"conversation":{"channel":"whatsapp"},"messages":[{"id":"id-interno","type":"text","text":"Sí"}]})
+    assert inbound[0].wa_message_id=="id-interno"
+    crm=CrmClient("http://crm.test","synthetic-commercial-key")
+    t=ComercialTools(crm,"conv","dispatch",inbound[0].wa_message_id,enabled=True)
+    respx_mock.get("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizaciones":[{"id":"q","version":2,"aprobada_version":2,"estado":"aceptada","accepted_message_id":"id-interno"}],"pedidos":[]}))
+    assert (await t.execute("comercial_consultar_aprobacion",{"cotizacionId":"q"},"consultar"))["ok"]
+    respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"pedido":{"id":"pedido","cotizacion_id":"q","version":2,"estado":"pendiente"}}))
+    assert (await t.execute("comercial_contratar",{"cotizacionId":"q","version":2},"contratar"))["ok"]
+    assert "pago permanece pendiente" in t.respuesta_verificada("Contratación registrada y pagada")
     await crm.aclose()

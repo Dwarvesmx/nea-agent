@@ -766,7 +766,7 @@ async def _tool_loop(
             ) + runtime.demo_tools() + runtime.comercial_tools(),
         )
         if not reply.tool_calls:
-            return reply.content  # turno de puro texto
+            return runtime.comercial_respuesta(reply.content)  # verifica recibo comercial antes de responder
         # content vacío con tool_calls es normal (turno solo-herramientas)
         messages.append(
             {
