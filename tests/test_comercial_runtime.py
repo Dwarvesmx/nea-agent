@@ -13,7 +13,7 @@ def test_intencion_confirmada_y_extra_pendiente_no_bloquean_propuesta():
         conv=Conversation(1,'cafeteria'),agenda=False,comercial=True)
     assert 'no vuelvas a preguntar si quiere avanzar' in prompt
     assert 'ejecuta comercial_preparar en este turno' in prompt
-    assert 'conserva su alcance en especial' in prompt
+    assert 'en pendientes para revisión interna' in prompt
     assert 'cotizacionId real' in prompt
 
 
