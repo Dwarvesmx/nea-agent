@@ -20,11 +20,12 @@ def test_intencion_confirmada_y_extra_pendiente_no_bloquean_propuesta():
 async def test_aviso_inyecta_solo_mensaje_del_turno(respx_mock):
     import json
     crm = CrmClient("http://crm.test", "synthetic-commercial-key")
-    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"estado":"pendiente"}))
+    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":True,"preguntaPendiente":False}}))
     runtime = ToolRuntime(SimpleNamespace(crm=crm),Conversation(1,"fixture"),"trusted",
         tz=ZoneInfo("UTC"),dispatch_id="dispatch",comercial_inbound_id="consent-real",comercial_enabled=True)
     assert (await runtime.execute_comercial("comercial_solicitar_aprobacion",{"cotizacionId":"q","version":1,"avisar":True},"consent"))["ok"]
     body=json.loads(route.calls[0].request.content)
+    assert "autorización para el aviso" in runtime._comercial.respuesta_verificada("Aceptación del aviso registrada")
     assert body["mensajeAvisoId"]=="consent-real"
     assert "avisar" not in body
     assert not (await runtime.execute_comercial("comercial_solicitar_aprobacion",{"cotizacionId":"q","version":1,"mensajeAvisoId":"otro"},"spoof"))["ok"]
@@ -89,7 +90,7 @@ async def test_loop_registra_y_ejecuta_herramienta_con_id_real(respx_mock):
     from hashlib import sha256
     import json
     crm=CrmClient("http://crm.test","synthetic-commercial-key")
-    route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente"}))
+    route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":True,"preguntaPendiente":False}}))
     class Llm:
         calls=0
         async def complete(self,messages,tools):
@@ -100,7 +101,7 @@ async def test_loop_registra_y_ejecuta_herramienta_con_id_real(respx_mock):
     ctx=SimpleNamespace(crm=crm,llm=Llm(),agenda_enabled=False)
     runtime=ToolRuntime(ctx,Conversation(1,"test"),"trusted",tz=ZoneInfo("UTC"),
         dispatch_id="dispatch",comercial_inbound_id="inbound",comercial_enabled=True)
-    assert await _tool_loop(ctx,[],runtime)=="Propuesta pendiente"
+    assert "autorización para el aviso" in await _tool_loop(ctx,[],runtime)
     assert json.loads(route.calls[0].request.content)["requestKey"]==sha256(b"dispatch:call-7").hexdigest()
     assert runtime.handoff_reason is None
     await crm.aclose()
@@ -158,4 +159,29 @@ async def test_retomar_aceptacion_persistida_y_consultar_pedido(respx_mock):
     respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"pedido":{"id":"pedido","cotizacion_id":"q","version":2,"estado":"pendiente"}}))
     assert (await t.execute("comercial_contratar",{"cotizacionId":"q","version":2},"contratar"))["ok"]
     assert "pago permanece pendiente" in t.respuesta_verificada("Contratación registrada y pagada")
+    await crm.aclose()
+
+async def test_consentimiento_rechazado_no_inventa_registro_ni_crea_propuesta(respx_mock):
+    from app.comercial_v1 import ComercialTools
+    crm=CrmClient("http://crm.test","synthetic-commercial-key")
+    respx_mock.get("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"negociacionActiva":"q","cotizaciones":[{"id":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":False,"preguntaPendiente":True},"preguntaAvisoActual":True}]}))
+    route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(422,json={"error":{"code":"consentimiento_no_acreditado"}}))
+    tools=ComercialTools(crm,"conv","d","mensaje-si",enabled=True,inbound_text="Sí, avísame")
+    text=await tools.iniciar([])
+    assert "No se pudo confirmar" in text and '¿' not in text
+    import json
+    assert len(route.calls)==1 and json.loads(route.calls[0].request.content)['action']=='solicitar_aprobacion'
+    assert json.loads(route.calls[0].request.content)['mensajeAvisoId']=='mensaje-si'
+    await crm.aclose()
+
+async def test_respuestas_incompletas_no_confirman_cotizacion_ni_consentimiento(respx_mock):
+    from app.comercial_v1 import ComercialTools
+    crm=CrmClient("http://crm.test","synthetic-commercial-key")
+    route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente"}))
+    t=ComercialTools(crm,"conv","d","m",enabled=True)
+    assert not (await t.execute('comercial_preparar',{'conceptos':[{'productoId':'p','cantidad':1}]},'crear'))['ok']
+    assert 'No se pudo confirmar' in t.respuesta_verificada('He registrado tu cotización')
+    route.mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":False,"preguntaPendiente":True}}))
+    assert not (await t.execute('comercial_solicitar_aprobacion',{'cotizacionId':'q','version':1,'avisar':True},'consentir'))['ok']
+    assert 'No se pudo confirmar' in t.respuesta_verificada('Ya registré tu aviso')
     await crm.aclose()

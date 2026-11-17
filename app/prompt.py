@@ -423,7 +423,7 @@ def build_system_prompt(
             "y presenta precio base, inclusiones y condiciones devueltos, distinguiendo "
             "precio orientativo de precio final aprobado. Consulta también los extras "
             "solicitados: no inventes compatibilidades, restricciones ni importes. "
-            "Con el producto y cantidades conocidos, ejecuta comercial_preparar en "
+            "Primero retoma la negociación y consentimiento confirmados en Vocero. Una respuesta Sí a la pregunta de aviso registra consentimiento de esa versión, no una propuesta nueva. No repitas la pregunta si está registrado. Con el producto y cantidades conocidos, ejecuta comercial_preparar en "
             "este turno; no esperes otra confirmación de intención. Un extra sin tarifa "
             "o sin concepto compatible no bloquea la propuesta: registra descripcion y solicitud "
             "en pendientes para revisión interna, sin asignarle un precio inventado. "

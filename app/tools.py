@@ -479,6 +479,7 @@ class ToolRuntime:
         dispatch_id: str | None = None,
         comercial_inbound_id: str | None = None,
         comercial_enabled: bool = False,
+        comercial_inbound_text: str | None = None,
     ) -> None:
         self._ctx = ctx
         self._dispatch_id = dispatch_id
@@ -492,7 +493,7 @@ class ToolRuntime:
         self._crm_conv_id = crm_conversation_id
         self._comercial = ComercialTools(
             ctx.crm, crm_conversation_id, dispatch_id or "", comercial_inbound_id or "",
-            enabled=bool(comercial_enabled and dispatch_id and comercial_inbound_id),
+            enabled=bool(comercial_enabled and dispatch_id and comercial_inbound_id), inbound_text=comercial_inbound_text,
         )
         self._profile = profile or BusinessProfile()
         self._tz = tz or _zona_del_negocio(ctx)
@@ -507,8 +508,11 @@ class ToolRuntime:
     def comercial_tools(self) -> list[dict[str, Any]]:
         return self._comercial.schemas()
 
-    def comercial_respuesta(self, text: str | None) -> str | None:
-        return self._comercial.respuesta_verificada(text) if self._comercial.enabled else text
+    async def comercial_iniciar(self, messages: list[dict[str, Any]]) -> str | None:
+        return await self._comercial.iniciar(messages) if self._comercial.enabled else None
+
+    async def comercial_respuesta(self, text: str | None) -> str | None:
+        return await self._comercial.finalizar(text) if self._comercial.enabled else text
 
     async def execute_comercial(self, name: str, args: dict[str, Any], tool_call_id: str) -> dict[str, Any]:
         return await self._comercial.execute(name, args, tool_call_id)

@@ -465,6 +465,7 @@ async def run_turn(
         dispatch_id=turno.dispatch_id if turno else None,
         comercial_inbound_id=inbound[-1].wa_message_id if inbound else None,
         comercial_enabled=comercial_disponible,
+        comercial_inbound_text=inbound[-1].text if inbound else None,
     )
     try:
         final_text = None
@@ -750,6 +751,9 @@ async def _tool_loop(
     pregunta. Sin él a la vista, el modelo escribe la respuesta completa ya
     con el resultado de la herramienta, que es lo que siempre hizo bien.
     """
+    continuidad = await runtime.comercial_iniciar(messages)
+    if continuidad is not None:
+        return continuidad
     for _ in range(MAX_TOOL_ROUNDS):
         reply = await ctx.llm.complete(
             messages,
@@ -766,7 +770,7 @@ async def _tool_loop(
             ) + runtime.demo_tools() + runtime.comercial_tools(),
         )
         if not reply.tool_calls:
-            return runtime.comercial_respuesta(reply.content)  # verifica recibo comercial antes de responder
+            return await runtime.comercial_respuesta(reply.content)  # verifica recibo comercial antes de responder
         # content vacío con tool_calls es normal (turno solo-herramientas)
         messages.append(
             {
