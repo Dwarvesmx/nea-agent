@@ -495,6 +495,7 @@ class ToolRuntime:
             ctx.crm, crm_conversation_id, dispatch_id or "", comercial_inbound_id or "",
             enabled=bool(comercial_enabled and dispatch_id and comercial_inbound_id), inbound_text=comercial_inbound_text,
         )
+        self.comercial_ultimo_resultado: dict[str, Any] | None = None
         self._profile = profile or BusinessProfile()
         self._tz = tz or _zona_del_negocio(ctx)
         # Efectos observables por turn.py:
@@ -511,11 +512,22 @@ class ToolRuntime:
     async def comercial_iniciar(self, messages: list[dict[str, Any]]) -> str | None:
         return await self._comercial.iniciar(messages) if self._comercial.enabled else None
 
+    def comercial_observaciones(self, text: str | None) -> list[str]:
+        return self._comercial.observaciones(text) if self._comercial.enabled else []
+
     async def comercial_respuesta(self, text: str | None) -> str | None:
         return await self._comercial.finalizar(text) if self._comercial.enabled else text
 
+    def comercial_recuperacion(self) -> str | None:
+        if not self._comercial.enabled or not self.comercial_ultimo_resultado:
+            return None
+        import json
+        resultado='La última operación no quedó confirmada.' if self.comercial_ultimo_resultado.get('ok') is False else 'La última operación devolvió un resultado confirmado; conserva únicamente los hechos de ese resultado.'
+        return (resultado+' Responde de forma natural: explica brevemente esa limitación y atiende las preguntas comerciales con los datos comprobados. No repitas la operación ni pidas de nuevo un consentimiento ya expresado. No muestres identificadores ni códigos. Datos confirmados: '+json.dumps({'cotizacion':self._comercial.actual,'pedido':self._comercial.pedido,'resultado':self.comercial_ultimo_resultado},ensure_ascii=False))
+
     async def execute_comercial(self, name: str, args: dict[str, Any], tool_call_id: str) -> dict[str, Any]:
-        return await self._comercial.execute(name, args, tool_call_id)
+        self.comercial_ultimo_resultado = await self._comercial.execute(name, args, tool_call_id)
+        return self.comercial_ultimo_resultado
 
     def demo_tools(self) -> list[dict[str, Any]]:
         import os

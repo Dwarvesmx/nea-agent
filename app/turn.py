@@ -754,22 +754,40 @@ async def _tool_loop(
     continuidad = await runtime.comercial_iniciar(messages)
     if continuidad is not None:
         return continuidad
-    for _ in range(MAX_TOOL_ROUNDS):
-        reply = await ctx.llm.complete(
-            messages,
-            tools=solo_encendidas(
-                con_mover_etapa(
-                    tool_schemas(
-                        ctx.agenda_enabled,
-                        bool(getattr(ctx.crm, "supports_agenda_v2", False)),
-                        bool(getattr(ctx.crm, "supports_coordination", False)),
+    reparaciones_comerciales = 0
+    rondas = MAX_TOOL_ROUNDS + 3 if runtime.comercial_tools() else MAX_TOOL_ROUNDS
+    for _ in range(rondas):
+        try:
+            reply = await ctx.llm.complete(
+                messages,
+                tools=solo_encendidas(
+                    con_mover_etapa(
+                        tool_schemas(
+                            ctx.agenda_enabled,
+                            bool(getattr(ctx.crm, "supports_agenda_v2", False)),
+                            bool(getattr(ctx.crm, "supports_coordination", False)),
+                        ),
+                        getattr(runtime, "etapas", []),
                     ),
-                    getattr(runtime, "etapas", []),
-                ),
-                getattr(runtime, "_profile", None),
-            ) + runtime.demo_tools() + runtime.comercial_tools(),
-        )
+                    getattr(runtime, "_profile", None),
+                ) + runtime.demo_tools() + runtime.comercial_tools(),
+            )
+        except LlmExhausted:
+            recuperacion=runtime.comercial_recuperacion()
+            if recuperacion is None:
+                raise
+            # Una respuesta vacía tras el error de función no elimina los datos
+            # del servicio. Recupera una respuesta de texto sin repetir escrituras.
+            limpio=[m for m in messages if m.get('role')!='tool' and not m.get('tool_calls')]
+            limpio.append({'role':'system','content':recuperacion})
+            reply=await ctx.llm.complete(limpio,tools=None)
         if not reply.tool_calls:
+            observaciones=runtime.comercial_observaciones(reply.content)
+            if observaciones and reparaciones_comerciales < 2:
+                reparaciones_comerciales+=1
+                messages.append({"role":"assistant","content":reply.content})
+                messages.append({"role":"system","content":"Reformula tu respuesta sin repetir operaciones ya confirmadas. Conserva la explicación útil y responde las preguntas del cliente. Correcciones obligatorias: "+" ".join(observaciones)})
+                continue
             return await runtime.comercial_respuesta(reply.content)  # verifica recibo comercial antes de responder
         # content vacío con tool_calls es normal (turno solo-herramientas)
         messages.append(

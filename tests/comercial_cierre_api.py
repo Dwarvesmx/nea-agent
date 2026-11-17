@@ -25,8 +25,8 @@ async def main():
     runtime=ToolRuntime(ctx,Conversation(1,"sintetico"),"conv",tz=ZoneInfo("UTC"),
         dispatch_id="cierre-integrado",comercial_inbound_id=message,comercial_enabled=True)
     text=await _tool_loop(ctx,[],runtime)
-    assert runtime._comercial.pedido and runtime._comercial.pedido["id"] in text
-    assert "pago permanece pendiente" in text
+    assert runtime._comercial.pedido and runtime._comercial.pedido["id"]
+    assert "pago todavía no está confirmado" in text
     assert runtime.handoff_reason is None
     print(json.dumps({"pedido":runtime._comercial.pedido,"respuesta":text}))
     await crm.aclose()

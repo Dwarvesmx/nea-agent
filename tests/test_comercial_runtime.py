@@ -11,10 +11,10 @@ from app.prompt import build_system_prompt
 def test_intencion_confirmada_y_extra_pendiente_no_bloquean_propuesta():
     prompt=build_system_prompt(profile=BusinessProfile(),context=None,
         conv=Conversation(1,'cafeteria'),agenda=False,comercial=True)
-    assert 'no vuelvas a preguntar si quiere avanzar' in prompt
-    assert 'ejecuta comercial_preparar en este turno' in prompt
-    assert 'en pendientes para revisión interna' in prompt
-    assert 'cotizacionId real' in prompt
+    assert 'sin pedir de nuevo esa intención' in prompt
+    assert 'Para una solicitud de información no crees una propuesta' in prompt
+    assert 'Un extra sin tarifa se registra pendiente' in prompt
+    assert 'confirma contratación únicamente con pedido real' in prompt
 
 
 async def test_aviso_inyecta_solo_mensaje_del_turno(respx_mock):
@@ -25,7 +25,7 @@ async def test_aviso_inyecta_solo_mensaje_del_turno(respx_mock):
         tz=ZoneInfo("UTC"),dispatch_id="dispatch",comercial_inbound_id="consent-real",comercial_enabled=True)
     assert (await runtime.execute_comercial("comercial_solicitar_aprobacion",{"cotizacionId":"q","version":1,"avisar":True},"consent"))["ok"]
     body=json.loads(route.calls[0].request.content)
-    assert "autorización para el aviso" in runtime._comercial.respuesta_verificada("Aceptación del aviso registrada")
+    assert runtime._comercial.respuesta_verificada("Aceptación del aviso registrada")=="Aceptación del aviso registrada"
     assert body["mensajeAvisoId"]=="consent-real"
     assert "avisar" not in body
     assert not (await runtime.execute_comercial("comercial_solicitar_aprobacion",{"cotizacionId":"q","version":1,"mensajeAvisoId":"otro"},"spoof"))["ok"]
@@ -51,7 +51,7 @@ def test_continuidad_comercial_no_inventa_aceptacion_o_enlace():
         assert "No ofrezcas un asesor" in prompt
     otro = build_system_prompt(profile=BusinessProfile(), context=None,
         conv=Conversation(1, "fixture"), comercial=False)
-    assert "CONTINUIDAD COMERCIAL" not in otro
+    assert "ORQUESTACIÓN COMERCIAL" not in otro
 
 
 async def test_registro_opcional_y_contexto_fijado(respx_mock):
@@ -101,7 +101,7 @@ async def test_loop_registra_y_ejecuta_herramienta_con_id_real(respx_mock):
     ctx=SimpleNamespace(crm=crm,llm=Llm(),agenda_enabled=False)
     runtime=ToolRuntime(ctx,Conversation(1,"test"),"trusted",tz=ZoneInfo("UTC"),
         dispatch_id="dispatch",comercial_inbound_id="inbound",comercial_enabled=True)
-    assert "autorización para el aviso" in await _tool_loop(ctx,[],runtime)
+    assert await _tool_loop(ctx,[],runtime)=="Propuesta pendiente"
     assert json.loads(route.calls[0].request.content)["requestKey"]==sha256(b"dispatch:call-7").hexdigest()
     assert runtime.handoff_reason is None
     await crm.aclose()
@@ -116,18 +116,18 @@ async def test_cierre_valida_recibos_y_no_contrata_tras_error(respx_mock):
     assert not route.called
     assert not (await t.execute("comercial_aceptar",ref,"acepta"))["ok"]
     assert not (await t.execute("comercial_contratar",ref,"sin-aceptacion"))["ok"]
-    assert "No se completó" in t.respuesta_verificada("Ya generé tu contratación")
+    assert "contratación todavía no quedó confirmada" in t.respuesta_verificada("Ya generé tu contratación")
     route.mock(return_value=httpx.Response(200,json={"estado":"aceptada"}))
     assert not (await t.execute("comercial_aceptar",ref,"recibo-incompleto"))["ok"]
     route.mock(return_value=httpx.Response(200,json={**ref,"estado":"aceptada"}))
     assert (await t.execute("comercial_aceptar",ref,"acepta-valida"))["ok"]
     route.mock(return_value=httpx.Response(200,json={"pedido":{}}))
     assert not (await t.execute("comercial_contratar",ref,"sin-pedido"))["ok"]
-    assert "No se completó" in t.respuesta_verificada("Tu pedido está listo")
+    assert "contratación todavía no quedó confirmada" in t.respuesta_verificada("Tu pedido está listo")
     route.mock(return_value=httpx.Response(200,json={"pedido":{"id":"pedido-real","cotizacion_id":"q","version":2,"estado":"pendiente"}}))
     assert (await t.execute("comercial_contratar",ref,"pedido"))["ok"]
-    assert "pedido-real" in t.respuesta_verificada("Pagado")
-    assert "pago permanece pendiente" in t.respuesta_verificada("Pagado")
+    assert t.pedido["id"]=="pedido-real"
+    assert "pago todavía no está confirmado" in t.respuesta_verificada("Pagado")
     await crm.aclose()
 
 async def test_loop_no_anuncia_exito_ante_error_o_sin_operacion(respx_mock):
@@ -141,10 +141,10 @@ async def test_loop_no_anuncia_exito_ante_error_o_sin_operacion(respx_mock):
             return SimpleNamespace(content="He registrado la aceptación y generado tu contratación",tool_calls=[] if self.calls>1 else [SimpleNamespace(id="aceptar",name="comercial_aceptar",arguments={"cotizacionId":"q","version":2})])
     ctx=SimpleNamespace(crm=crm,llm=Llm(),agenda_enabled=False)
     runtime=ToolRuntime(ctx,Conversation(1,"test"),"trusted",tz=ZoneInfo("UTC"),dispatch_id="d",comercial_inbound_id="id-interno",comercial_enabled=True)
-    assert "No se completó" in await _tool_loop(ctx,[],runtime)
+    assert "contratación todavía no quedó confirmada" in await _tool_loop(ctx,[],runtime)
     ctx.llm.calls=1
     runtime=ToolRuntime(ctx,Conversation(1,"test"),"trusted",tz=ZoneInfo("UTC"),dispatch_id="d2",comercial_inbound_id="id2",comercial_enabled=True)
-    assert "No tengo confirmación" in await _tool_loop(ctx,[],runtime)
+    assert "contratación todavía no quedó confirmada" in await _tool_loop(ctx,[],runtime)
     await crm.aclose()
 
 async def test_retomar_aceptacion_persistida_y_consultar_pedido(respx_mock):
@@ -158,7 +158,7 @@ async def test_retomar_aceptacion_persistida_y_consultar_pedido(respx_mock):
     assert (await t.execute("comercial_consultar_aprobacion",{"cotizacionId":"q"},"consultar"))["ok"]
     respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"pedido":{"id":"pedido","cotizacion_id":"q","version":2,"estado":"pendiente"}}))
     assert (await t.execute("comercial_contratar",{"cotizacionId":"q","version":2},"contratar"))["ok"]
-    assert "pago permanece pendiente" in t.respuesta_verificada("Contratación registrada y pagada")
+    assert "pago todavía no está confirmado" in t.respuesta_verificada("Contratación registrada y pagada")
     await crm.aclose()
 
 async def test_consentimiento_rechazado_no_inventa_registro_ni_crea_propuesta(respx_mock):
@@ -167,8 +167,11 @@ async def test_consentimiento_rechazado_no_inventa_registro_ni_crea_propuesta(re
     respx_mock.get("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"negociacionActiva":"q","cotizaciones":[{"id":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":False,"preguntaPendiente":True},"preguntaAvisoActual":True}]}))
     route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(422,json={"error":{"code":"consentimiento_no_acreditado"}}))
     tools=ComercialTools(crm,"conv","d","mensaje-si",enabled=True,inbound_text="Sí, avísame")
-    text=await tools.iniciar([])
-    assert "No se pudo confirmar" in text and '¿' not in text
+    assert await tools.iniciar([]) is None
+    assert not route.called
+    assert not (await tools.execute('comercial_solicitar_aprobacion',{'cotizacionId':'q','version':1,'avisar':True},'aviso'))['ok']
+    text=tools.respuesta_verificada('Servicios y Citas cuesta $2,490 como referencia. El aviso está registrado.')
+    assert '$2,490' in text and 'todavía no quedó autorizado' in text
     import json
     assert len(route.calls)==1 and json.loads(route.calls[0].request.content)['action']=='solicitar_aprobacion'
     assert json.loads(route.calls[0].request.content)['mensajeAvisoId']=='mensaje-si'
@@ -180,8 +183,41 @@ async def test_respuestas_incompletas_no_confirman_cotizacion_ni_consentimiento(
     route=respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente"}))
     t=ComercialTools(crm,"conv","d","m",enabled=True)
     assert not (await t.execute('comercial_preparar',{'conceptos':[{'productoId':'p','cantidad':1}]},'crear'))['ok']
-    assert 'No se pudo confirmar' in t.respuesta_verificada('He registrado tu cotización')
+    assert 'propuesta todavía no quedó registrada' in t.respuesta_verificada('He registrado tu cotización')
     route.mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":False,"preguntaPendiente":True}}))
     assert not (await t.execute('comercial_solicitar_aprobacion',{'cotizacionId':'q','version':1,'avisar':True},'consentir'))['ok']
-    assert 'No se pudo confirmar' in t.respuesta_verificada('Ya registré tu aviso')
+    assert 'aviso todavía no quedó confirmado' in t.respuesta_verificada('Ya registré tu aviso')
     await crm.aclose()
+
+def test_importes_para_el_modelo_son_mxn_sin_alterar_centavos():
+    from app.comercial_v1 import presentacion_mxn
+    p=presentacion_mxn({'productos':[{'unico':249000,'mensual':None}],'descuento':199950,'ajusteUnico':-100})
+    assert p['productos'][0]['unico']==249000
+    assert p['productos'][0]['importesMXN']=={'unico':'$2,490.00 MXN','mensual':'Pendiente de cotizar'}
+    assert p['importesMXN']['descuento']=='$1,999.50 MXN'
+    assert p['importesMXN']['ajusteUnico']=='-$1.00 MXN'
+
+def test_un_fallo_no_sustituye_la_explicacion_comercial():
+    from app.comercial_v1 import ComercialTools
+    t=ComercialTools(object(),'conv','d','m',enabled=True)
+    t.operacion='solicitar_aprobacion';t.error_operacion=True
+    answer=t.respuesta_verificada('El servicio cuesta $2,490 MXN e incluye hasta 6 servicios. Tu aviso quedó registrado.')
+    assert '$2,490' in answer and 'hasta 6 servicios' in answer
+    assert 'todavía no quedó confirmado' in answer
+    assert 'quedó registrado' not in answer
+    assert 'no está confirmado' in t.respuesta_verificada('La propuesta está pendiente, pero ya está pagada.')
+
+def test_descripcion_de_servicios_no_es_una_afirmacion_de_registro():
+    from app.comercial_v1 import ComercialTools
+    t=ComercialTools(object(),'conv','d','m',enabled=True)
+    texto='Servicios y solicitudes de citas está pensado para mostrar tus precios y recibir solicitudes por WhatsApp.'
+    assert t.respuesta_verificada(texto)==texto
+
+def test_precio_no_autorizado_no_se_presenta_como_tarifa():
+    from app.comercial_v1 import ComercialTools
+    t=ComercialTools(object(),'conv','d','m',enabled=True)
+    t.importes_confirmados={149900,249000,0}
+    assert t.importes_no_confirmados('La web cuesta $1,490 MXN')==['$1,490']
+    assert 'importesMXN' in ' '.join(t.observaciones('La web cuesta $1,490 MXN'))
+    assert '$1,490' not in t.respuesta_verificada('La web cuesta $1,490 MXN')
+    assert t.respuesta_verificada('La web cuesta $1,499.00 MXN')=='La web cuesta $1,499.00 MXN'

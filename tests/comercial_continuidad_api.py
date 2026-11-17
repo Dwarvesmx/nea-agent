@@ -25,8 +25,18 @@ async def main():
                 calls=0
                 async def complete(self,messages,tools):
                     self.calls+=1
-                    return SimpleNamespace(content='Propuesta creada, ¿quieres que prepare otra?' if self.calls>1 else None,
-                        tool_calls=[] if self.calls>1 else [SimpleNamespace(id='preparar',name='comercial_preparar',arguments={"conceptos":[{"productoId":"citas-integrada","cantidad":1}]})])
+                    if n==0 and self.calls==1:
+                        name='comercial_preparar';args={"conceptos":[{"productoId":"citas-integrada","cantidad":1}]}
+                    elif n==0 and self.calls==2:
+                        result=json.loads(messages[-1]['content'])['data'];name='comercial_solicitar_aprobacion';args={'cotizacionId':result['cotizacionId'],'version':result['version']}
+                    elif n==1 and self.calls==1:
+                        name='comercial_solicitar_aprobacion';args={'cotizacionId':results[0]['cotizacionId'],'version':1,'avisar':True}
+                    elif n==2 and self.calls==1:
+                        name='comercial_preparar';args={"conceptos":[{"productoId":"citas-integrada","cantidad":1}]}
+                    else:
+                        answer='Servicios y Citas tiene un precio orientativo de $2,490 MXN. Tu propuesta está pendiente de revisión. '+('¿Te aviso por este WhatsApp cuando tu cotización esté autorizada?' if n==0 else 'Tu autorización para el aviso está registrada.')
+                        return SimpleNamespace(content=answer,tool_calls=[])
+                    return SimpleNamespace(content=None,tool_calls=[SimpleNamespace(id=f'call-{self.calls}',name=name,arguments=args)])
             ctx=SimpleNamespace(crm=crm,llm=ModeloProgramado(),agenda_enabled=False)
             runtime=ToolRuntime(ctx,Conversation(1,'estetica-integrada'),'estetica-integrada',tz=ZoneInfo('UTC'),dispatch_id=f'estetica-{n}',comercial_inbound_id=inbound,comercial_enabled=True,comercial_inbound_text=text)
             answer=await _tool_loop(ctx,[],runtime)
@@ -36,7 +46,7 @@ async def main():
             else:
                 assert 'autorización para el aviso' in answer and '¿' not in answer
             if n==1:
-                assert ctx.llm.calls==0  # respuesta breve resuelta por estado, sin nueva creación
+                assert runtime._comercial.actual['consentimiento']['registrado'] is True
             results.append(runtime._comercial.actual)
             await message(answer,'out')
         assert len({q['cotizacionId'] for q in results})==1
