@@ -25,7 +25,7 @@ from app.config import canonical_identity
 from app.crm import CrmConflict, CrmError, CrmUnreachable
 from app.formato import a_whatsapp
 from app.hostility import ALERT as HOSTILITY_ALERT, hostile_streak
-from app.llm import LlmExhausted
+from app.llm import LlmExhausted, registrar_llm
 from app.stall import (
     ALERTA as STALL_ALERT,
     FICHA_CIERRE,
@@ -475,12 +475,8 @@ async def run_turn(
         if final_text is None:
             final_text = await _tool_loop(ctx, messages, runtime)
     except LlmExhausted as exc:
-        logger.error(
-            "turno %s: LLM agotó reintentos (%s) — silencio + handoff error",
-            identity,
-            exc,
-        )
-        await _safe_handoff(ctx, str(crm_conv_id), "error", turno)
+        registrar_llm("llm_solicita_pausa", correlation_id=exc.correlation_id, motivo="llm_exhausted")
+        await _safe_handoff(ctx, str(crm_conv_id), "error", turno, llm_error=exc)
         await ctx.store.update_conversation(
             conv.id, phase="cerrada", followup_due_at=None
         )
@@ -495,13 +491,16 @@ async def run_turn(
         logger.warning("turno %s: la respuesta %s — pido otra", identity, motivo)
         messages.append({"role": "assistant", "content": final_text})
         messages.append({"role": "system", "content": CORRIGE_RESPUESTA.format(motivo=motivo)})
+        llm_error = None
         try:
             final_text = await _tool_loop(ctx, messages, runtime)
-        except LlmExhausted:
+        except LlmExhausted as exc:
+            llm_error = exc
+            registrar_llm("llm_solicita_pausa", correlation_id=exc.correlation_id, motivo="llm_exhausted")
             final_text = None
         if final_text is None or _respuesta_invalida(final_text, previos):
             logger.error("turno %s: la segunda respuesta tampoco sirve — silencio + handoff error", identity)
-            await _safe_handoff(ctx, str(crm_conv_id), "error", turno)
+            await _safe_handoff(ctx, str(crm_conv_id), "error", turno, llm_error=llm_error)
             await ctx.store.update_conversation(conv.id, phase="cerrada", followup_due_at=None)
             return
 
@@ -893,14 +892,20 @@ async def _send(ctx: AppContext, conv_id: int, crm_conv_id: str, text: str, *, h
 
 
 async def _safe_handoff(
-    ctx: AppContext, crm_conv_id: str, reason: str, turno: _Turno | None = None
+    ctx: AppContext, crm_conv_id: str, reason: str, turno: _Turno | None = None,
+    *, llm_error: LlmExhausted | None = None,
 ) -> None:
     try:
         await ctx.crm.post_handoff(crm_conv_id, reason)
         logger.info("handoff registrado en el CRM (reason=%s)", reason)
     except CrmError as exc:
-        logger.error("no pude registrar el handoff (%s): %s", reason, exc)
+        if llm_error is None:
+            logger.error("no pude registrar el handoff (%s): %s", reason, exc)
+        else:
+            registrar_llm("llm_pausa", correlation_id=llm_error.correlation_id, registrada=False)
         return
+    if llm_error is not None:
+        registrar_llm("llm_pausa", correlation_id=llm_error.correlation_id, registrada=True)
     # Queda anotado para que la red de seguridad no registre otro encima.
     if turno is not None:
         turno.handoff = reason

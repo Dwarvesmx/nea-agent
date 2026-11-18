@@ -333,3 +333,45 @@ async def test_arranca_sin_LLM_API_KEY_y_dice_crm_en_health(monkeypatch, respx_m
 )
 def test_health_dice_con_que_llave_piensa(ajustes, esperado):
     assert main._identidad(make_settings(**ajustes))["llm"] == esperado
+
+
+@pytest.mark.parametrize("salida,status,categoria", [
+    ({"content": None}, 200, "respuesta_vacia"),
+    ({"content": None, "tool_calls": [{
+        "id": "call_1", "type": "function",
+        "function": {"name": "comercial_catalogo", "arguments": '{"dato":"cliente-privado"}'},
+    }]}, 200, "valida"),
+    (None, 429, "error_http"),
+])
+async def test_traza_llm_correlacionada_sin_datos_privados(
+    salida, status, categoria, respx_mock, caplog, monkeypatch
+):
+    from app.llm import LlmExhausted
+
+    cuerpo = {"error": {"message": "credencial-privada"}} if salida is None else {
+        "id": "chat-test", "created": 0, "object": "chat.completion",
+        "model": "z-ai/glm-5.3-flash",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", **salida}}],
+    }
+    ruta = respx_mock.post("https://crm.test/v1/chat/completions").mock(
+        side_effect=lambda _: httpx.Response(status, json=cuerpo)
+    )
+    cliente = OpenAiLlm("token-privado", "z-ai/glm-5.3-flash", base_url="https://crm.test/v1")
+    monkeypatch.setattr(cliente, "RETRIES", 0)
+    caplog.set_level("INFO", logger="nea.llm")
+    try:
+        llamada = cliente.complete([{"role": "user", "content": "prompt-privado"}])
+        if categoria == "valida":
+            assert len((await llamada).tool_calls) == 1
+        else:
+            with pytest.raises(LlmExhausted):
+                await llamada
+        registro = json.loads(next(r.getMessage() for r in caplog.records if '"llm_intento"' in r.getMessage()))
+        assert registro["correlation_id"] == ruta.calls[0].request.headers["X-LLM-Correlation-Id"]
+        assert registro["categoria"] == categoria
+        assert registro["http_recibido"] == status
+        assert registro["agotado"] is (categoria != "valida")
+        for privado in ("credencial-privada", "token-privado", "prompt-privado", "cliente-privado"):
+            assert privado not in caplog.text
+    finally:
+        await cliente._client.close()

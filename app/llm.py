@@ -15,16 +15,40 @@ import asyncio
 import base64
 import json
 import logging
+import re
+from datetime import datetime, timezone
+from time import monotonic
+from uuid import uuid4
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AsyncOpenAI
 
 logger = logging.getLogger("nea.llm")
 
 
 class LlmExhausted(Exception):
     """El LLM falló todos los reintentos — el turno debe degradar en silencio."""
+
+    def __init__(self, message: str, *, correlation_id: str | None = None) -> None:
+        super().__init__(message)
+        self.correlation_id = correlation_id
+
+
+def _modelo_para_log(value: Any) -> str | None:
+    # Solo identificadores de modelos, nunca URLs, headers ni valores de aspecto secreto.
+    if not isinstance(value, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,119}", value):
+        return None
+    if "://" in value or re.search(r"(?:^|/)(?:sk[-_]|gh[pousr]_|eyJ)", value):
+        return None
+    return value
+
+
+def registrar_llm(evento: str, **campos: Any) -> None:
+    logger.info("%s", json.dumps({
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "servicio": "nea", "evento": evento, **campos,
+    }))
 
 
 @dataclass
@@ -276,8 +300,16 @@ class OpenAiLlm:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
     ) -> LlmReply:
-        last_error: Exception | None = None
+        correlation_id = str(uuid4())
         for attempt in range(self.RETRIES + 1):
+            inicio = monotonic()
+            status = None
+            modelo_respuesta = None
+            proveedor_respuesta = None
+            motivo_fin = None
+            texto_util = None
+            herramientas = None
+            extra: dict[str, Any] = {}
             try:
                 kwargs: dict[str, Any] = {}
                 if tools:
@@ -286,9 +318,16 @@ class OpenAiLlm:
                 extra = self._extras()
                 if extra:
                     kwargs["extra_body"] = extra
-                resp = await self._client.chat.completions.create(
-                    model=self._model, messages=messages, **kwargs
+                raw = await self._client.chat.completions.with_raw_response.create(
+                    model=self._model, messages=messages,
+                    extra_headers={
+                        "X-LLM-Correlation-Id": correlation_id,
+                        "X-LLM-Attempt": str(attempt + 1),
+                    },
+                    **kwargs,
                 )
+                status = raw.status_code
+                resp = raw.parse()
                 u = getattr(resp, "usage", None)
                 if u is not None:
                     det = getattr(u, "prompt_tokens_details", None)
@@ -297,17 +336,48 @@ class OpenAiLlm:
                     self.usage["completion"] += getattr(u, "completion_tokens", 0) or 0
                     self.usage["cached"] += getattr(det, "cached_tokens", 0) or 0
                 reply = self._parse(resp)
-                if reply.content or reply.tool_calls:
-                    return reply
-                last_error = ValueError("respuesta vacía del LLM (sin content ni tools)")
-                logger.warning("llm: respuesta vacía, intento %d", attempt + 1)
-            except Exception as exc:  # red, API, parseo — todo reintenta
-                last_error = exc
+                modelo_respuesta = _modelo_para_log(getattr(resp, "model", None))
+                proveedor = getattr(resp, "provider", None)
+                if isinstance(proveedor, str) and proveedor.lower() in {
+                    "google", "google ai studio", "google vertex", "openai", "anthropic",
+                    "openrouter", "z-ai", "z.ai", "deepseek", "groq", "fireworks", "together",
+                    "amazon bedrock", "azure", "cerebras", "mistral",
+                }:
+                    proveedor_respuesta = proveedor.lower()
+                choices = getattr(resp, "choices", None) or []
+                fin = getattr(choices[0], "finish_reason", None) if choices else None
+                if fin in ("stop", "length", "tool_calls", "content_filter", "function_call"):
+                    motivo_fin = fin
+                texto_util = bool(reply.content)
+                herramientas = len(reply.tool_calls)
+                categoria = "valida" if texto_util or herramientas else "respuesta_vacia"
+            except APIStatusError as exc:
+                status = exc.status_code
+                categoria = "error_http"
                 self._quiza_por_los_extras(exc)
-                logger.warning("llm: fallo en intento %d: %s", attempt + 1, exc)
-            if attempt < self.RETRIES:
+            except APITimeoutError:
+                categoria = "timeout"
+            except APIConnectionError:
+                categoria = "error_comunicacion"
+            except Exception as exc:
+                categoria = "error_parseo_o_interno"
+                self._quiza_por_los_extras(exc)
+
+            valida = categoria == "valida"
+            agotado = not valida and attempt == self.RETRIES
+            registrar_llm(
+                "llm_intento", correlation_id=correlation_id, intento=attempt + 1,
+                modelo_solicitado=_modelo_para_log(self._model), modelo_respuesta=modelo_respuesta,
+                proveedor_respuesta=proveedor_respuesta, http_recibido=status, motivo_fin=motivo_fin, texto_util=texto_util,
+                herramientas=herramientas, categoria=categoria, agotado=agotado,
+                limite_salida=extra.get("max_tokens"),
+                duracion_ms=round((monotonic() - inicio) * 1000),
+            )
+            if valida:
+                return reply
+            if not agotado:
                 await asyncio.sleep(2**attempt)  # 1 s, 2 s
-        raise LlmExhausted(str(last_error))
+        raise LlmExhausted(categoria, correlation_id=correlation_id)
 
     @staticmethod
     def _parse(resp: Any) -> LlmReply:
@@ -427,7 +497,7 @@ class LlmPorElCrm:
                 timeout=self._timeout,
             )
             self._clientes[clave] = cliente
-            logger.info("llm por el CRM: pienso con %s", model)
+            logger.info("llm por el CRM: pienso con %s", _modelo_para_log(model))
         return cliente
 
     async def complete(

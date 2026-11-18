@@ -196,9 +196,10 @@ async def test_whisper_tampoco_multiplica_los_intentos(sin_backoff, respx_mock):
 
 
 async def test_un_timeout_en_el_turno_termina_en_silencio_y_handoff_error(
-    sin_backoff, respx_mock
+    sin_backoff, respx_mock, caplog
 ):
     """El camino completo: turno real, proveedor colgado, CRM en respx."""
+    caplog.set_level("INFO", logger="nea.llm")
     rutas = mock_crm_basics(respx_mock)
     respx_mock.route(host="127.0.0.1").pass_through()
     async with _ProveedorColgado() as proveedor:
@@ -218,3 +219,12 @@ async def test_un_timeout_en_el_turno_termina_en_silencio_y_handoff_error(
     assert json.loads(rutas["handoff"].calls[0].request.content)["reason"] == "error"
     conv = await ctx.store.get_or_create_conversation(IDENTITY)
     assert conv.phase == "cerrada"
+    eventos = [json.loads(r.getMessage()) for r in caplog.records
+               if r.name == "nea.llm" and r.getMessage().startswith("{")]
+    intentos = [r for r in eventos if r["evento"] == "llm_intento"]
+    assert [r["categoria"] for r in intentos] == ["timeout"] * 3
+    assert intentos[-1]["agotado"]
+    pausas = [r for r in eventos if r["evento"] == "llm_pausa"]
+    assert len(pausas) == 1 and pausas[0]["registrada"]
+    assert {r["correlation_id"] for r in intentos + pausas} == {pausas[0]["correlation_id"]}
+    assert IDENTITY not in json.dumps(eventos)
