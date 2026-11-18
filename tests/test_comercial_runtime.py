@@ -221,3 +221,23 @@ def test_precio_no_autorizado_no_se_presenta_como_tarifa():
     assert 'importesMXN' in ' '.join(t.observaciones('La web cuesta $1,490 MXN'))
     assert '$1,490' not in t.respuesta_verificada('La web cuesta $1,490 MXN')
     assert t.respuesta_verificada('La web cuesta $1,499.00 MXN')=='La web cuesta $1,499.00 MXN'
+
+async def test_propuesta_personalizada_sin_producto_preserva_solicitud(respx_mock):
+    import json
+    crm = CrmClient("http://crm.test", "synthetic-commercial-key")
+    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200,json={"cotizacionId":"q","version":1,"estado":"pendiente","consentimiento":{"registrado":False,"preguntaPendiente":False}}))
+    runtime=ToolRuntime(SimpleNamespace(crm=crm),Conversation(1,"fixture"),"trusted",tz=ZoneInfo("UTC"),dispatch_id="dispatch",comercial_inbound_id="mensaje",comercial_enabled=True)
+    resultado=await runtime.execute_comercial("comercial_preparar",{"conceptos":[],"pendientes":[{"descripcion":"A medida","solicitud":"Evaluar alcance"}]},"call")
+    assert resultado["ok"]
+    propuesta=json.loads(route.calls[0].request.content)["propuesta"]
+    assert propuesta == {"conceptos":[],"pendientes":[{"descripcion":"A medida","solicitud":"Evaluar alcance"}]}
+    await crm.aclose()
+
+def test_propuesta_personalizada_pendiente_solicita_revision_interna():
+    from app.comercial_v1 import ComercialTools
+    t=ComercialTools(object(),'conv','d','m',enabled=True)
+    t.actual={'cotizacionId':'q','version':1,'estado':'pendiente'}
+    t.operacion='preparar'
+    assert any('comercial_solicitar_aprobacion' in x for x in t.observaciones('Tu propuesta sigue en revisión.'))
+    t.operacion='solicitar_aprobacion'
+    assert not any('comercial_solicitar_aprobacion' in x for x in t.observaciones('Tu propuesta sigue en revisión.'))
