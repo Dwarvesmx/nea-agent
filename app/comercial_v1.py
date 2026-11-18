@@ -153,10 +153,12 @@ class ComercialTools:
     def respuesta_verificada(self, text: str | None) -> str | None:
         # Última defensa: corrige solo afirmaciones operativas sin evidencia.
         # La reparación conversacional previa la hace el propio modelo.
-        partes=[]
-        for parte in re.split(r'(?<=[.!?\n])\s+|\s+pero\s+|;\s*',text or ''):
-            partes.append(self._problema_operacion(parte) or parte)
-        salida=' '.join(partes)
+        # Conserva exactamente los separadores originales (incluidos párrafos y
+        # viñetas) mientras revisa cada frase por separado.
+        partes=re.split(r'((?<=[.!?\n])\s+|\s+pero\s+|;\s*)',text or '')
+        for indice in range(0, len(partes), 2):
+            partes[indice]=self._problema_operacion(partes[indice]) or partes[indice]
+        salida=''.join(partes)
         salida=re.sub(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}','esta propuesta',salida,flags=re.I)
         salida=re.sub(r'(?:ID|referencia)\s*[`:#]*\s*[0-9a-f]{8}\b','el registro',salida,flags=re.I)
         salida=re.sub(r'comercial_[a-z_]+|evidencia_aceptacion_invalida|consentimiento_no_acreditado','gestión pendiente',salida)

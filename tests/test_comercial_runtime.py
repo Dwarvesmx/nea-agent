@@ -241,3 +241,24 @@ def test_propuesta_personalizada_pendiente_solicita_revision_interna():
     assert any('comercial_solicitar_aprobacion' in x for x in t.observaciones('Tu propuesta sigue en revisión.'))
     t.operacion='solicitar_aprobacion'
     assert not any('comercial_solicitar_aprobacion' in x for x in t.observaciones('Tu propuesta sigue en revisión.'))
+
+def test_formato_comercial_conserva_parrafos_y_corrige_solo_afirmacion_falsa():
+    from app.comercial_v1 import ComercialTools
+    from app.formato import a_whatsapp
+    t=ComercialTools(object(), 'conv', 'dispatch', 'message', enabled=True)
+    t.operacion='solicitar_aprobacion'; t.error_operacion=True
+    original='## Tu propuesta\n\n**Precio:** $2,490 MXN\n- Hasta seis servicios\n- Citas por WhatsApp\n\n¿Incluye dominio? ¿Cómo contrato?\n\nTu aviso quedó registrado.'
+    procesado=t.respuesta_verificada(original)
+    assert procesado.startswith('## Tu propuesta\n\n**Precio:** $2,490 MXN\n- Hasta seis servicios\n- Citas por WhatsApp\n\n')
+    assert '¿Incluye dominio? ¿Cómo contrato?' in procesado
+    assert 'aviso todavía no quedó confirmado' in procesado
+    enviado=a_whatsapp(procesado)
+    assert '*Tu propuesta*\n\n*Precio:* $2,490 MXN\n- Hasta seis servicios' in enviado
+    assert '**' not in enviado
+
+
+def test_respuesta_comercial_breve_y_separadores_no_cambian():
+    from app.comercial_v1 import ComercialTools
+    t=ComercialTools(object(), 'conv', 'dispatch', 'message', enabled=True)
+    for texto in ['Claro, puedo ayudarte.', 'Precio: $2,490; incluye hosting.\n\n¿Te explico el alcance?']:
+        assert t.respuesta_verificada(texto)==texto

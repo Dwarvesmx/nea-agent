@@ -33,7 +33,7 @@ class ModeloObservado(OpenAiLlm):
     def _parse(resp):
         result=OpenAiLlm._parse(resp)
         if not result.content and not result.tool_calls:
-            meta={'model':getattr(resp,'model',None),'choices':[{'finish_reason':c.finish_reason,'refusal':bool(getattr(c.message,'refusal',None)),'content_type':type(c.message.content).__name__,'content_length':len(c.message.content or []),'has_reasoning':bool(getattr(c.message,'reasoning',None))} for c in resp.choices]}
+            meta={'http_status':'2xx (SDK devolvió respuesta)', 'max_tokens':2048, 'model':getattr(resp,'model',None),'usage':{'prompt':getattr(getattr(resp,'usage',None),'prompt_tokens',None),'completion':getattr(getattr(resp,'usage',None),'completion_tokens',None)},'choices':[{'finish_reason':c.finish_reason,'native_finish_reason':(getattr(c,'model_extra',None) or {}).get('native_finish_reason'),'refusal':bool(getattr(c.message,'refusal',None)),'content_type':type(c.message.content).__name__,'content_length':len(c.message.content or []),'tool_calls':len(getattr(c.message,'tool_calls',None) or []),'has_reasoning':bool(getattr(c.message,'reasoning',None))} for c in resp.choices]}
             EVIDENCE.mkdir(parents=True,exist_ok=True)
             with (EVIDENCE/'respuestas-vacias.jsonl').open('a',encoding='utf-8') as f:f.write(json.dumps(meta)+'\n')
         return result
@@ -99,8 +99,17 @@ async def main():
                 if len(state['cotizaciones'])!=1:errors.append('duplicó cotización')
             if fail and any(q['consentimiento']['registrado'] for q in state['cotizaciones']):errors.append('falso consentimiento')
             if fail and not re.search(r'no.{0,25}(?:confirm|registr|autoriz)',joined,re.I):errors.append('no explicó fallo de registro')
-            if name=='personalizada' and not any(c['name']=='comercial_solicitar_aprobacion' for c in tracked.choices):errors.append('no solicitó revisión interna mediante herramienta')
-            if name=='personalizada' and (not state['cotizaciones'] or state['cotizaciones'][0]['estado']!='pendiente' or not any(c['name']=='comercial_preparar' for c in tracked.choices)):errors.append('no registró solicitud personalizada pendiente')
+            if name.startswith('personalizada') and not any(c['name']=='comercial_solicitar_aprobacion' for c in tracked.choices):errors.append('no solicitó revisión interna mediante herramienta')
+            if name.startswith('personalizada') and (not state['cotizaciones'] or state['cotizaciones'][0]['estado']!='pendiente' or not any(c['name']=='comercial_preparar' for c in tracked.choices)):errors.append('no registró solicitud personalizada pendiente')
+            if name=='informativa_web' and state['cotizaciones']:errors.append('consulta informativa creó cotización')
+            if name in {'hosting_solo','inclusion_especial','paquete_incluido'} and (not state['cotizaciones'] or not any(c['name']=='comercial_preparar' for c in tracked.choices)):errors.append('no registró propuesta')
+            if name=='hosting_solo' and state['cotizaciones']:
+                snap=state['cotizaciones'][0]['snapshot']
+                if any(c['productoId']=='web' for c in snap['conceptos']):errors.append('exigió página web')
+            if name=='paquete_incluido' and state['cotizaciones']:
+                snap=state['cotizaciones'][0]['snapshot']
+                if any(c['productoId']=='extra-12' for c in snap['conceptos']):errors.append('duplicó inclusión')
+            if name=='inclusion_especial' and re.search(r'(?:gratis|sin costo|sin cargo)',joined,re.I) and not re.search(r'(?:no|sin prometer|sujeto|pendiente)',joined,re.I):errors.append('prometió gratuidad')
             if name=='contratar' and (not state['pedidos'] or state['pedidos'][0]['estado']!='pendiente'):errors.append('sin pedido pendiente')
             if name=='segunda' and len(state['cotizaciones'])!=2:errors.append('segunda negociación no registrada')
             if name=='segunda' and (re.search(r'\$1,?490',joined) or not re.search(r'1,?499',joined)):errors.append('precio de web alterado o ausente')
@@ -113,6 +122,12 @@ async def main():
             EVIDENCE.mkdir(parents=True,exist_ok=True);(EVIDENCE/('modelo-real-'+model.replace('/','-')+'-resultados.json')).write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
             await crm.aclose()
         await scenario('personalizada','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')
+        await scenario('personalizada_2','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')
+        await scenario('personalizada_3','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')
+        await scenario('informativa_web','Solo quiero información: ¿cuánto cuesta una página web y qué incluye? No prepares cotización todavía.')
+        await scenario('hosting_solo','Quiero cotizar hosting básico independiente para un sitio que ya tengo. No quiero una página nueva.')
+        await scenario('inclusion_especial','Quiero cotizar una página web y evaluar incluir una sexta sección en el precio, sin asumir que sea gratis.')
+        await scenario('paquete_incluido','Quiero cotizar la página web con el dominio y hosting incluidos durante el primer año, sin cobrar esos servicios otra vez.')
         await scenario('recomendar','Tengo una barbería. Quiero mostrar mis servicios, precios y recibir solicitudes de citas por WhatsApp. ¿Qué me recomiendas, cuánto cuesta y cómo contratar?')
         await scenario('precio','¿Cuánto cuesta Servicios y solicitudes de citas, qué incluye y cómo se contrata?')
         await scenario('consentimiento','Sí, avísame','pendiente')
