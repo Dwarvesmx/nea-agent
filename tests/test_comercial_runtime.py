@@ -262,3 +262,14 @@ def test_respuesta_comercial_breve_y_separadores_no_cambian():
     t=ComercialTools(object(), 'conv', 'dispatch', 'message', enabled=True)
     for texto in ['Claro, puedo ayudarte.', 'Precio: $2,490; incluye hosting.\n\n¿Te explico el alcance?']:
         assert t.respuesta_verificada(texto)==texto
+
+
+def test_error_aviso_no_borra_precio_y_contratacion_en_parrafos_markdown():
+    from app.comercial_v1 import ComercialTools
+    t=ComercialTools(object(),'conv','d','m',enabled=True)
+    t.actual={'cotizacionId':'q','version':1,'estado':'pendiente'}
+    t.operacion='solicitar_aprobacion';t.error_operacion=True
+    original='**Propuesta registrada**\nPrecio orientativo: $1,499 MXN.\n\n**Cómo contratar**\nPrimero revisión y aprobación, después tu aceptación y el pedido con pago pendiente.\n\nTu aviso quedó registrado.'
+    salida=t.respuesta_verificada(original)
+    assert '$1,499' in salida and 'Cómo contratar' in salida and 'aceptación' in salida
+    assert 'Tu aviso quedó registrado' not in salida

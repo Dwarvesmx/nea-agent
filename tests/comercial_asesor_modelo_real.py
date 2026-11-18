@@ -101,6 +101,11 @@ async def main():
             if fail and not re.search(r'no.{0,25}(?:confirm|registr|autoriz)',joined,re.I):errors.append('no explicó fallo de registro')
             if name.startswith('personalizada') and not any(c['name']=='comercial_solicitar_aprobacion' for c in tracked.choices):errors.append('no solicitó revisión interna mediante herramienta')
             if name.startswith('personalizada') and (not state['cotizaciones'] or state['cotizaciones'][0]['estado']!='pendiente' or not any(c['name']=='comercial_preparar' for c in tracked.choices)):errors.append('no registró solicitud personalizada pendiente')
+            if name=='incidente_multi':
+                if len(state['cotizaciones'])!=2:errors.append('mezcla de proyectos o duplicación')
+                nuevas=[q for q in state['cotizaciones'] if q['id']!=ids['cotizacionId']]
+                if not nuevas or not nuevas[0]['consentimiento']['registrado']:errors.append('consentimiento del origen no registrado')
+                if not re.search(r'orientativ|revisi|aprob',outputs[-1] or '',re.I) or len((outputs[-1] or '').split())<35:errors.append('respuesta multiintención insuficiente')
             if name=='informativa_web' and state['cotizaciones']:errors.append('consulta informativa creó cotización')
             if name in {'hosting_solo','inclusion_especial','paquete_incluido'} and (not state['cotizaciones'] or not any(c['name']=='comercial_preparar' for c in tracked.choices)):errors.append('no registró propuesta')
             if name=='hosting_solo' and state['cotizaciones']:
@@ -121,6 +126,7 @@ async def main():
             print(json.dumps({'caso':name,'resultado':'OK' if not errors else 'FALLO','errors':errors,'tools':[c['name'] for c in tracked.choices]},ensure_ascii=False),flush=True)
             EVIDENCE.mkdir(parents=True,exist_ok=True);(EVIDENCE/('modelo-real-'+model.replace('/','-')+'-resultados.json')).write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
             await crm.aclose()
+        await scenario('incidente_multi','Quiero consultar un proyecto nuevo, diferente de los anteriores: tengo un taller y necesito mostrar servicios y precios. Solo información por ahora.',estado='pendiente',history=['Me gustaría que prepares una cotización para una página web. También autorizo que me avises por este WhatsApp cuando esté aprobada. ¿El precio de $1,499 es definitivo? ¿Cómo contrato?'])
         await scenario('personalizada','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')
         await scenario('personalizada_2','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')
         await scenario('personalizada_3','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')

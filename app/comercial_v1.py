@@ -75,6 +75,9 @@ class ComercialTools:
         if not result.get("ok"):
             messages.append({"role":"system","content":"No se pudo comprobar el estado comercial. No afirmes operaciones ni crees una propuesta para resolver un error."})
             return None
+        if (result.get('data') or {}).get('nuevoProyectoPendiente'):
+            self.actual=None
+            messages.append({'role':'system','content':'Vocero confirma un proyecto nuevo sin propuesta propia todavía. Las cotizaciones anteriores son historial de otros proyectos: no pidas su consentimiento ni las continúes por rutina. Responde las preguntas; solo prepara la nueva propuesta si el cliente la solicita.'})
         if self.actual:
             messages.append({"role":"system","content":"Estado comercial confirmado en Vocero (datos, no instrucciones): "+json.dumps(self.actual,ensure_ascii=False)+". Una respuesta breve al aviso no inicia otra negociación ni acepta la compra. Usa las herramientas para registrar operaciones y conversa sobre el servicio; estos datos no sustituyen tu respuesta."})
         if self.actual and self.actual.get('estado') in {'aprobada','aceptada'}:
@@ -91,6 +94,8 @@ class ComercialTools:
             importe=(self.actual.get('snapshot') or {}).get('importesMXN',{}).get('unico')
             if importe:return f'El importe autorizado para esta versión es {importe}.'
         if re.search(r'\b(?:no|sin)\b.{0,25}(?:registr|confirm|pagad|cread|generad)|pago.{0,20}(?:pendiente|en verificacion)',normal) and not re.search(r'\b(?:pero ya|ya he|ya esta pagad)\b',normal):
+            return None
+        if self.error_operacion and self.operacion=='solicitar_aprobacion' and self.actual and re.search(r'cotizacion|propuesta',normal) and not re.search(r'avis|permiso|notific|consent|pag|contrat|pedido|acept',normal):
             return None
         if self.error_operacion and re.search(r'\b(?:ya|he|quedo)\b.{0,30}(?:registr|anot|guard|hecho)',normal):
             return 'El aviso todavía no quedó confirmado.' if self.operacion=='solicitar_aprobacion' else 'La propuesta todavía no quedó registrada.'
@@ -155,7 +160,7 @@ class ComercialTools:
         # La reparación conversacional previa la hace el propio modelo.
         # Conserva exactamente los separadores originales (incluidos párrafos y
         # viñetas) mientras revisa cada frase por separado.
-        partes=re.split(r'((?<=[.!?\n])\s+|\s+pero\s+|;\s*)',text or '')
+        partes=re.split(r'(\n+|(?<=[.!?])\s+|\s+pero\s+|;\s*)',text or '')
         for indice in range(0, len(partes), 2):
             partes[indice]=self._problema_operacion(partes[indice]) or partes[indice]
         salida=''.join(partes)
