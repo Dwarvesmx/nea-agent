@@ -62,6 +62,7 @@ class ToolCall:
 class LlmReply:
     content: str | None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    correlation_id: str | None = None
 
 
 class Llm(Protocol):
@@ -369,11 +370,13 @@ class OpenAiLlm:
                 "llm_intento", correlation_id=correlation_id, intento=attempt + 1,
                 modelo_solicitado=_modelo_para_log(self._model), modelo_respuesta=modelo_respuesta,
                 proveedor_respuesta=proveedor_respuesta, http_recibido=status, motivo_fin=motivo_fin, texto_util=texto_util,
+                longitud_texto=len(reply.content) if texto_util and reply.content else 0,
                 herramientas=herramientas, categoria=categoria, agotado=agotado,
                 limite_salida=extra.get("max_tokens"),
                 duracion_ms=round((monotonic() - inicio) * 1000),
             )
             if valida:
+                reply.correlation_id = correlation_id
                 return reply
             if not agotado:
                 await asyncio.sleep(2**attempt)  # 1 s, 2 s

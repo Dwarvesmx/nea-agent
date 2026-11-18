@@ -787,7 +787,19 @@ async def _tool_loop(
                 messages.append({"role":"assistant","content":reply.content})
                 messages.append({"role":"system","content":"Reformula tu respuesta sin repetir operaciones ya confirmadas. Conserva la explicación útil y responde las preguntas del cliente. Correcciones obligatorias: "+" ".join(observaciones)})
                 continue
-            return await runtime.comercial_respuesta(reply.content)  # verifica recibo comercial antes de responder
+            resultado = await runtime.comercial_respuesta(reply.content)
+            entrada = getattr(getattr(runtime, "_comercial", None), "inbound_text", None) or ""
+            solo_simbolos = bool(resultado and not any(c.isalnum() for c in resultado))
+            registrar_llm("respuesta_comercial_verificada", correlation_id=getattr(reply, "correlation_id", None),
+                          longitud_entrada=len(reply.content or ""), longitud_salida=len(resultado or ""),
+                          modificada=resultado != reply.content, solo_simbolos=solo_simbolos,
+                          reparaciones=reparaciones_comerciales)
+            if (runtime.comercial_tools() and solo_simbolos
+                    and ("?" in entrada or "¿" in entrada or len(entrada.split()) >= 5)):
+                registrar_llm("respuesta_comercial_solo_simbolos", correlation_id=getattr(reply, "correlation_id", None), longitud_texto=len(resultado),
+                              reparaciones=reparaciones_comerciales)
+                return "No pude preparar una respuesta clara a tu consulta. ¿Podrías repetirme qué información necesitas?"
+            return resultado  # verifica recibo comercial antes de responder
         # content vacío con tool_calls es normal (turno solo-herramientas)
         messages.append(
             {

@@ -12,6 +12,7 @@ import unicodedata
 from typing import Any
 import json
 from decimal import Decimal
+from app.llm import registrar_llm
 
 _REF = {"cotizacionId": {"type": "string"}, "version": {"type": "integer", "minimum": 1}}
 _LINE = {"type": "object", "properties": {"productoId": {"type": "string"}, "cantidad": {"type": "integer", "minimum": 1, "maximum": 1000}, "baseId": {"type": "string"}, "cobertura": {"type":"string","enum":["adicional","superior","renovacion"],"description":"Si se combina con web, catálogo o citas, identifica dominio adicional, hosting superior o renovación posterior; no cobrar la inclusión inicial."}, "inicioMes": {"type":"integer","minimum":1,"description":"Para renovación combinada con paquete, mes de inicio desde 13."}}, "required": ["productoId", "cantidad"], "additionalProperties": False}
@@ -147,7 +148,7 @@ class ComercialTools:
             problemas.append('La propuesta quedó pendiente: solicita su revisión interna con comercial_solicitar_aprobacion usando su ID y versión antes de confirmar que se solicitó. El consentimiento de aviso es independiente.')
         normal_user=unicodedata.normalize('NFKD',self.inbound_text or '').encode('ascii','ignore').decode().lower()
         normal_text=unicodedata.normalize('NFKD',text or '').encode('ascii','ignore').decode().lower()
-        if not self.actual and not self.error_operacion and re.search(r'(?:quiero|necesito|solicito|deseo).{0,60}cotiz|(?:prepara|registra).{0,40}(?:propuesta|cotiz)',normal_user):
+        if not self.actual and not self.error_operacion and not self._rechaza_cotizacion() and re.search(r'(?:quiero|necesito|solicito|deseo).{0,60}cotiz|(?:prepara|registra).{0,40}(?:propuesta|cotiz)',normal_user):
             problemas.append('El cliente solicitó una cotización. Si tienes información suficiente, utiliza comercial_preparar; para un servicio fuera del catálogo usa conceptos vacío y pendientes sin precio. No afirmes registro sin respuesta real. Si faltan datos indispensables pregunta solamente por ellos.')
         if re.search(r'(?:quiero|necesito|solicito|deseo).{0,60}(?:cotiz|contrat)|(?:prepara|registra).{0,35}(?:propuesta|cotiz)',normal_user) and re.search(r'¿[^?]*(?:quieres|gustaria|parece|podemos)[^?]*(?:prepar|registr)[^?]*\?',normal_text):
             problemas.append('El cliente ya pidió cotizar o contratar. No preguntes otra vez si quiere preparar la propuesta: usa la herramienta apropiada con el contexto y confirma solo su resultado. Atiende también precio y alcance.')
@@ -177,9 +178,15 @@ class ComercialTools:
     def schemas(self) -> list[dict[str, Any]]:
         return TOOL_SCHEMAS if self.enabled else []
 
+    def _rechaza_cotizacion(self) -> bool:
+        texto = unicodedata.normalize('NFKD', self.inbound_text or '').encode('ascii', 'ignore').decode().lower()
+        return bool(re.search(r'\bno\s+(?:quiero|deseo|necesito|solicito|prepares?|generes?|registres?)\b[^.!?\n]{0,50}\b(?:cotiz\w*|propuesta|presupuesto)\b', texto))
+
     async def execute(self, name: str, args: dict[str, Any], tool_call_id: str) -> dict[str, Any]:
         if not self.enabled or name not in NAMES:
             return {"ok": False, "error": "no_disponible"}
+        if name == 'comercial_preparar' and self._rechaza_cotizacion():
+            return {'ok': False, 'error': 'cotizacion_no_solicitada'}
         definition = next(t["function"]["parameters"] for t in TOOL_SCHEMAS if t["function"]["name"] == name)
         if set(args) - set(definition["properties"]) or not set(definition["required"]) <= set(args):
             return {"ok": False, "error": "argumentos_invalidos"}
@@ -221,6 +228,15 @@ class ComercialTools:
                     body["mensajeId"] = self.inbound_message_id
                 response = await self.crm._request("POST", "/api/bot/comercial", json=body)
             payload = presentacion_mxn(response.json())
+            codigo = (payload.get('error') or {}).get('code') if isinstance(payload.get('error'), dict) else None
+            conocidos = {'consentimiento_no_acreditado', 'consentimiento_de_otra_negociacion',
+                         'version_desactualizada', 'mensaje_origen_invalido', 'mensaje_origen_reutilizado',
+                         'nueva_intencion_no_acreditada', 'seleccionar_negociacion',
+                         'evidencia_aceptacion_invalida', 'cotizacion_no_solicitada'}
+            registrar_llm('comercial_resultado', herramienta=name, http=response.status_code,
+                          codigo=codigo if codigo in conocidos else None,
+                          origen_hash=sha256((self.conversation_id + ':' + (self.inbound_message_id or '')).encode()).hexdigest(),
+                          turno_hash=sha256((self.dispatch_id or '').encode()).hexdigest())
             def importes(v):
                 if isinstance(v,list):
                     for x in v:importes(x)

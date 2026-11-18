@@ -85,6 +85,9 @@ async def main():
                 outputs.append(answer);runtimes.append(runtime);messages.append({'role':'assistant','content':answer});await message(answer or '', 'out')
             state=(await fixtures.get(url+'/fixture/state',params={'conversationId':conv})).json()
             errors=[]
+            if name=='incidente_lavanderia':
+                if len(state['cotizaciones']) != 1:errors.append('creó una cotización no solicitada')
+                if len((outputs[-1] or '').split()) < 10:errors.append('respuesta informativa insuficiente')
             if any('[PRUEBA:' in (x or '') for x in outputs):errors.append('modelo agotó reintentos sin respuesta válida')
             joined=' '.join(x or '' for x in outputs)
             if re.search(r'[a-f0-9]{8}-[a-f0-9-]{27,}|comercial_[a-z_]+|evidencia_aceptacion_invalida',joined,re.I):errors.append('detalle interno visible')
@@ -126,6 +129,7 @@ async def main():
             print(json.dumps({'caso':name,'resultado':'OK' if not errors else 'FALLO','errors':errors,'tools':[c['name'] for c in tracked.choices]},ensure_ascii=False),flush=True)
             EVIDENCE.mkdir(parents=True,exist_ok=True);(EVIDENCE/('modelo-real-'+model.replace('/','-')+'-resultados.json')).write_text(json.dumps(results,ensure_ascii=False,indent=2),encoding='utf-8')
             await crm.aclose()
+        await scenario('incidente_lavanderia','Es un proyecto nuevo, distinto al taller de bicicletas: tengo una lavandería. ¿Qué página web recomiendas, cuánto cuesta y qué incluye? Solo quiero información, no deseo una cotización.',estado='pendiente')
         await scenario('incidente_multi','Quiero consultar un proyecto nuevo, diferente de los anteriores: tengo un taller y necesito mostrar servicios y precios. Solo información por ahora.',estado='pendiente',history=['Me gustaría que prepares una cotización para una página web. También autorizo que me avises por este WhatsApp cuando esté aprobada. ¿El precio de $1,499 es definitivo? ¿Cómo contrato?'])
         await scenario('personalizada','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')
         await scenario('personalizada_2','Quiero cotizar una herramienta personalizada para organizar los turnos de mi taller, no necesito página web. No conozco el precio; prepara mi propuesta para revisión.')

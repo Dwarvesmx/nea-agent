@@ -8,6 +8,45 @@ from app.profile import BusinessProfile
 from app.prompt import build_system_prompt
 
 
+async def test_consulta_comercial_no_envia_solo_emoji_tras_reparaciones(respx_mock):
+    from app.turn import _tool_loop
+    crm = CrmClient("http://crm.test", "synthetic-commercial-key")
+    respx_mock.get("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200, json={"cotizaciones": []}))
+    class Llm:
+        calls = 0
+        async def complete(self, messages, tools):
+            self.calls += 1
+            return SimpleNamespace(content="🚲", tool_calls=[])
+    ctx = SimpleNamespace(crm=crm, llm=Llm(), agenda_enabled=False)
+    runtime = ToolRuntime(ctx, Conversation(1, "fixture"), "trusted", tz=ZoneInfo("UTC"),
+                          dispatch_id="d", comercial_inbound_id="m", comercial_enabled=True,
+                          comercial_inbound_text="Para mi lavandería, ¿qué página recomiendas y cuánto cuesta?")
+    result = await _tool_loop(ctx, [], runtime)
+    assert result.startswith("No pude preparar una respuesta clara")
+    assert ctx.llm.calls == 3
+    assert runtime.handoff_reason is None
+    runtime_corto = ToolRuntime(ctx, Conversation(2, "fixture"), "trusted", tz=ZoneInfo("UTC"),
+                                dispatch_id="d2", comercial_inbound_id="m2", comercial_enabled=True,
+                                comercial_inbound_text="Hola")
+    assert await _tool_loop(ctx, [], runtime_corto) == "🚲"
+    await crm.aclose()
+
+
+async def test_no_crea_cotizacion_cuando_cliente_la_rechaza(respx_mock):
+    from app.comercial_v1 import ComercialTools
+    crm = CrmClient("http://crm.test", "synthetic-commercial-key")
+    route = respx_mock.post("http://crm.test/api/bot/comercial").mock(return_value=httpx.Response(200, json={}))
+    tools = ComercialTools(crm, "conv", "dispatch", "message", enabled=True,
+                           inbound_text="Solo quiero información. No deseo una cotización.")
+    result = await tools.execute("comercial_preparar", {"conceptos": []}, "call")
+    assert result == {"ok": False, "error": "cotizacion_no_solicitada"}
+    assert not route.called
+    assert not any('solicitó una cotización' in item for item in tools.observaciones("Te explico el servicio."))
+    tools.inbound_text = "Sí, deseo una cotización para mi lavandería."
+    assert not tools._rechaza_cotizacion()
+    await crm.aclose()
+
+
 def test_intencion_confirmada_y_extra_pendiente_no_bloquean_propuesta():
     prompt=build_system_prompt(profile=BusinessProfile(),context=None,
         conv=Conversation(1,'cafeteria'),agenda=False,comercial=True)
