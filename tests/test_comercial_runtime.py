@@ -216,6 +216,35 @@ async def test_consentimiento_rechazado_no_inventa_registro_ni_crea_propuesta(re
     assert json.loads(route.calls[0].request.content)['mensajeAvisoId']=='mensaje-si'
     await crm.aclose()
 
+async def test_aviso_no_envia_referencia_distinta_de_la_vigente(respx_mock):
+    from app.comercial_v1 import ComercialTools
+
+    crm = CrmClient('http://crm.test', 'synthetic-commercial-key')
+    current = {'id': 'vigente', 'version': 1, 'estado': 'pendiente'}
+    old = {'id': 'anterior', 'version': 1, 'estado': 'pendiente'}
+    respx_mock.get('http://crm.test/api/bot/comercial').mock(side_effect=[
+        httpx.Response(200, json={'negociacionActiva': 'vigente', 'cotizaciones': [current, old]}),
+        httpx.Response(200, json={'cotizaciones': [old]}),
+    ])
+    post = respx_mock.post('http://crm.test/api/bot/comercial').mock(return_value=httpx.Response(
+        200, json={'cotizacionId': 'vigente', 'version': 1, 'estado': 'pendiente',
+                   'consentimiento': {'registrado': True, 'preguntaPendiente': False}}))
+    tools = ComercialTools(crm, 'conv', 'despacho', 'mensaje', enabled=True, inbound_text='Sí, avísame')
+    await tools.iniciar([])
+    await tools.execute('comercial_consultar_aprobacion', {'cotizacionId': 'anterior'}, 'consulta')
+    for quote, version in [('anterior', 1), ('vigente', 2)]:
+        result = await tools.execute('comercial_solicitar_aprobacion', {
+            'cotizacionId': quote, 'version': version, 'avisar': True}, 'referencia-incorrecta')
+        assert result['error'] == 'referencia_aviso_distinta'
+        assert result['referenciaVigente'] == {'cotizacionId': 'vigente', 'version': 1}
+    assert not post.called
+    result = await tools.execute('comercial_solicitar_aprobacion', {
+        'cotizacionId': 'vigente', 'version': 1, 'avisar': True}, 'aviso-correcto')
+    assert result['ok']
+    assert len(post.calls) == 1
+    await crm.aclose()
+
+
 async def test_respuestas_incompletas_no_confirman_cotizacion_ni_consentimiento(respx_mock):
     from app.comercial_v1 import ComercialTools
     crm=CrmClient("http://crm.test","synthetic-commercial-key")
