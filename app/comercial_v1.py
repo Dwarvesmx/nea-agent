@@ -25,9 +25,9 @@ def _tool(name: str, description: str, properties: dict[str, Any], required: lis
 TOOL_SCHEMAS = [
     _tool("comercial_catalogo", "Consulta productos, extras compatibles y condiciones. Los números monetarios originales están en centavos: comunica exclusivamente importesMXN, ya expresados en pesos mexicanos. Orientativo o pendiente no es un precio final autorizado. También recupera las cotizaciones de esta conversación para retomar su id y versión.", {}, []),
     _tool("comercial_preparar", "Continúa la negociación activa por defecto. Usa nuevaNegociacion=true únicamente para otro proyecto o una segunda solicitud explícita; actualizarAlcance=true para cambiar la misma propuesta y cotizacionId para elegirla. Un Sí nunca crea otra. Prepara cotización con precios calculados por servidor. Solo comunicar como oferta final si estado=aprobada. Si pendiente, es propuesta interna, solicita aprobación y conserva cotizacionId/version. Registra modificaciones sin tarifa autorizada en pendientes con descripcion y solicitud; no inventes productoId, precio cero ni incompatibilidades. Puedes combinar múltiples extras conocidos con pendientes. Si la solicitud no tiene producto aplicable, usa conceptos vacío y registra la necesidad en pendientes para revisión; nunca inventes precios.", {"cotizacionId":{"type":"string"},"nuevaNegociacion":{"type":"boolean"},"actualizarAlcance":{"type":"boolean"},"version":{"type":"integer","minimum":1},"conceptos": {"type": "array", "items": _LINE, "minItems": 0, "maxItems": 40}, "especial": {"type": "string"}, "pendientes": {"type":"array","maxItems":40,"items":{"type":"object","properties":{"descripcion":{"type":"string"},"solicitud":{"type":"string"}},"required":["descripcion","solicitud"],"additionalProperties":False}}}, ["conceptos"]),
-    _tool("comercial_solicitar_aprobacion", "Registra solicitud interna sin transferir. Pregunta si desea aviso de autorización por este WhatsApp. Si la pregunta pendiente es el aviso de esta cotización, Sí o Sí, avísame autorizan avisar=true. Consulta consentimiento registrado; no vuelvas a pedirlo. El servidor verifica mensaje y contexto.", {**_REF, "avisar": {"type": "boolean"}}, ["cotizacionId", "version"]),
+    _tool("comercial_solicitar_aprobacion", "Registra la solicitud interna sin transferir. Si el mensaje actual pide cotizar y autoriza el aviso por este WhatsApp, primero prepara la cotización y luego usa su ID y versión con avisar=true en el mismo turno. También usa avisar=true ante una afirmación natural a la pregunta vigente de aviso para esa cotización. Vocero verifica el mensaje y el contexto. Confirma el permiso solo si consentimiento.registrado es verdadero. Si falla, explica brevemente que no quedó confirmado. Si falta contexto, registra la solicitud sin avisar y pregunta una vez si quiere el aviso por este WhatsApp cuando aprueben su cotización.", {**_REF, "avisar": {"type": "boolean"}}, ["cotizacionId", "version"]),
     _tool("comercial_consultar_aprobacion", "Recupera versión y decisión actual de la cotización del prospecto, sin cambiarla.", {"cotizacionId": {"type": "string"}}, ["cotizacionId"]),
-    _tool("comercial_aceptar", "Registra aceptación explícita de la propuesta aprobada en el mensaje actual. Un Sí solo vale si responde a la aceptación de esa propuesta, no a un aviso u otra pregunta. Espera estado=aceptada con cotizacionId/version coincidentes antes de contratar. No implica pago.", _REF, ["cotizacionId", "version"]),
+    _tool("comercial_aceptar", "Registra aceptación explícita de la propuesta aprobada en el mensaje actual. Una afirmación breve solo vale como respuesta inmediata a la pregunta del aviso de aprobación enviado para esa misma versión. Permitir un aviso no es aceptar la propuesta. Si falta evidencia, pide una decisión clara sobre la propuesta aprobada, sin exigir una frase literal. Espera estado=aceptada con cotizacionId/version coincidentes antes de contratar. No implica pago.", _REF, ["cotizacionId", "version"]),
     _tool("comercial_contratar", "Ejecuta solo después de aceptación confirmada por comercial_aceptar o consulta de esa misma versión aceptada. Crea contratación única; éxito requiere pedido.id real, versión coincidente y pago pendiente. Un error no es contratación.", _REF, ["cotizacionId", "version"]),
     _tool("comercial_consultar_cobro", "Consulta estado de pago verificado por administración; intención de compra no es pago.", {"cotizacionId": {"type": "string"}}, ["cotizacionId"]),
     _tool("comercial_enlace_cobro", "Recupera exclusivamente el enlace administrativamente aprobado del pedido. Si falta, no inventarlo. Compartirlo usa el envío habitual de Nea.", {"cotizacionId": {"type": "string"}}, ["cotizacionId"]),
@@ -232,9 +232,22 @@ class ComercialTools:
             conocidos = {'consentimiento_no_acreditado', 'consentimiento_de_otra_negociacion',
                          'version_desactualizada', 'mensaje_origen_invalido', 'mensaje_origen_reutilizado',
                          'nueva_intencion_no_acreditada', 'seleccionar_negociacion',
-                         'evidencia_aceptacion_invalida', 'cotizacion_no_solicitada'}
+                         'evidencia_aceptacion_invalida', 'intencion_aceptacion_no_acreditada', 'cotizacion_no_solicitada'}
+            referencia = payload.get('cotizacionId') or args.get('cotizacionId')
+            version = payload.get('version', args.get('version'))
+            permiso = payload.get('consentimiento')
+            permiso_confirmado = None
+            if name == 'comercial_solicitar_aprobacion':
+                permiso_confirmado = (200 <= response.status_code < 300 and isinstance(permiso, dict)
+                    and permiso.get('registrado') is True
+                    and payload.get('cotizacionId') == args.get('cotizacionId')
+                    and payload.get('version') == args.get('version'))
             registrar_llm('comercial_resultado', herramienta=name, http=response.status_code,
                           codigo=codigo if codigo in conocidos else None,
+                          cotizacion_id=referencia if isinstance(referencia, str) and re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', referencia) else None,
+                          version=version if type(version) is int else None,
+                          permiso_solicitado=args.get('avisar') is True if name == 'comercial_solicitar_aprobacion' else None,
+                          permiso_confirmado=permiso_confirmado,
                           origen_hash=sha256((self.conversation_id + ':' + (self.inbound_message_id or '')).encode()).hexdigest(),
                           turno_hash=sha256((self.dispatch_id or '').encode()).hexdigest())
             def importes(v):
