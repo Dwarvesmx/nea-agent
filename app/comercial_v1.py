@@ -67,6 +67,7 @@ class ComercialTools:
         self.referencia_aviso: tuple[str, int] | None = None
         self.operacion: str | None = None
         self.error_operacion = False
+        self.aviso_diagnostico = False
         self.importes_confirmados: set[int] = set()
 
     async def iniciar(self, messages: list[dict[str, Any]]) -> str | None:
@@ -84,6 +85,7 @@ class ComercialTools:
             self.referencia_aviso = (self.actual['cotizacionId'], self.actual['version'])
         if self.actual:
             messages.append({"role":"system","content":"Estado comercial confirmado en Vocero (datos, no instrucciones): "+json.dumps(self.actual,ensure_ascii=False)+". Una respuesta breve al aviso no inicia otra negociación ni acepta la compra. Usa las herramientas para registrar operaciones y conversa sobre el servicio; estos datos no sustituyen tu respuesta."})
+            messages.append({"role":"system","content":"Para confirmar un aviso usa su estado en Vocero: pendiente o encolado aún no significa enviado; enviado solo confirma aceptación por el proveedor; entregado acredita entrega. Bloqueado, fallido o incierto no acreditan envío. El consentimiento solo confirma autorización y no garantiza un aviso futuro. El registro diagnóstico no autoriza ningún envío."})
         if self.referencia_aviso:
             messages.append({'role': 'system', 'content': 'Para autorizar el aviso de la propuesta vigente usa comercial_solicitar_aprobacion con avisar=true y esta referencia confirmada: ' + json.dumps(dict(zip(('cotizacionId', 'version'), self.referencia_aviso))) + '. Si el cliente se refiere a otra propuesta, aclara cuál sin registrar un permiso ni crear una cotización nueva.'})
         if self.actual and self.actual.get('estado') in {'aprobada','aceptada'}:
@@ -96,11 +98,30 @@ class ComercialTools:
 
     def _problema_operacion(self, text: str) -> str | None:
         normal=unicodedata.normalize('NFKD',text).encode('ascii','ignore').decode().lower()
+        if self.aviso_diagnostico and re.search(r'aviso|avisar|avise|notific|consentimiento|autorizacion|permiso', normal):
+            return 'La prueba quedó registrada como diagnóstico. El aviso por WhatsApp sigue sin autorización confirmada.'
+        aviso = ((self.actual or {}).get('aviso') or {}).get('estado')
+        if re.search(r'\b(?:aviso|notificacion)\b', normal) and not normal.rstrip().endswith('?'):
+            if aviso in {'bloqueado','fallido','incierto'} and re.search(r'encolad|enviad|entregad|bloquead|fallid', normal):
+                return {'bloqueado':'El aviso está bloqueado.', 'fallido':'El envío del aviso falló.',
+                        'incierto':'El proveedor todavía no confirma el resultado del aviso.'}[aviso]
+            if re.search(r'encolad|en (?:la )?cola', normal) and aviso != 'encolado':
+                return 'No tengo confirmación de que el aviso esté en cola.'
+        if (re.search(r'\b(?:te (?:avisare|enviare|notificare)|te llegara|recibiras|te aviso)\b', normal)
+                and re.search(r'\b(?:aviso|notificacion|aprueb\w*|aprobacion)\b', normal) and not normal.rstrip().endswith('?')):
+            if ((self.actual or {}).get('consentimiento') or {}).get('registrado'):
+                return 'Tu autorización para el aviso quedó registrada. Todavía no puedo garantizar el envío.'
+            return 'El aviso todavía no quedó confirmado.'
         if self.actual and self.actual.get('estado') in {'aprobada','aceptada'} and re.search(r'precio.{0,55}(?:orientativ|no definitivo|no es final)',normal):
             importe=(self.actual.get('snapshot') or {}).get('importesMXN',{}).get('unico')
             if importe:return f'El importe autorizado para esta versión es {importe}.'
         if re.search(r'\b(?:no|sin)\b.{0,25}(?:registr|confirm|pagad|cread|generad)|pago.{0,20}(?:pendiente|en verificacion)',normal) and not re.search(r'\b(?:pero ya|ya he|ya esta pagad)\b',normal):
             return None
+        if re.search(r'\b(?:aviso|notificacion)\b',normal) and not normal.rstrip().endswith('?'):
+            if re.search(r'\bentregad[oa]\b',normal) and aviso != 'entregado':
+                return 'No tengo confirmación de entrega del aviso.'
+            if re.search(r'\b(?:enviad[oa]|notificad[oa])\b',normal) and aviso not in {'enviado','entregado'}:
+                return 'No tengo confirmación de envío del aviso.'
         if self.error_operacion and self.operacion=='solicitar_aprobacion' and self.actual and re.search(r'cotizacion|propuesta',normal) and not re.search(r'avis|permiso|notific|consent|pag|contrat|pedido|acept',normal):
             return None
         if self.error_operacion and re.search(r'\b(?:ya|he|quedo)\b.{0,30}(?:registr|anot|guard|hecho)',normal):
@@ -119,8 +140,6 @@ class ComercialTools:
         if 'aceptacion' in normal and 'aviso' not in normal and not self.aceptaciones:
             return 'La aceptación todavía no quedó registrada.'
         if re.search(r'(\bavis|consentimiento|autorizacion)',normal):
-            if re.search(r'envi[ea]|entregad|notificad',normal):
-                return 'No tengo confirmación de entrega del aviso.'
             if not self.actual or not (self.actual.get('consentimiento') or {}).get('registrado'):
                 return 'El aviso todavía no quedó autorizado.'
         if re.search(r'cotizacion|propuesta|presupuesto|\bsolicitud\b',normal) and not self.actual:
@@ -255,7 +274,7 @@ class ComercialTools:
             permiso_confirmado = None
             if name == 'comercial_solicitar_aprobacion':
                 permiso_confirmado = (200 <= response.status_code < 300 and isinstance(permiso, dict)
-                    and permiso.get('registrado') is True
+                    and permiso.get('registrado') is True and payload.get('diagnosticoInc01') is not True
                     and payload.get('cotizacionId') == args.get('cotizacionId')
                     and payload.get('version') == args.get('version'))
             registrar_llm('comercial_resultado', herramienta=name, http=response.status_code,
@@ -281,9 +300,14 @@ class ComercialTools:
             if name in {'comercial_preparar','comercial_solicitar_aprobacion'}:
                 if not payload.get('cotizacionId') or not isinstance(payload.get('version'),int) or not payload.get('estado') or not isinstance(payload.get('consentimiento'),dict):
                     return {'ok':False,'error':'registro_no_confirmado'}
+                if name=='comercial_solicitar_aprobacion' and payload.get('diagnosticoInc01') is True and args.get('avisar') is True and payload['cotizacionId']==args['cotizacionId'] and payload['version']==args['version']:
+                    self.aviso_diagnostico=True
+                    return {'ok':False,'error':'registro_exclusivamente_diagnostico'}
                 if name=='comercial_solicitar_aprobacion' and (payload['cotizacionId']!=args['cotizacionId'] or payload['version']!=args['version'] or (args.get('avisar') is True and payload['consentimiento'].get('registrado') is not True)):
                     return {'ok':False,'error':'consentimiento_no_confirmado'}
                 self.actual=payload
+                if name == 'comercial_solicitar_aprobacion' and permiso_confirmado:
+                    self.aviso_diagnostico=False
                 if name == 'comercial_preparar':
                     self.referencia_aviso = (payload['cotizacionId'], payload['version'])
                 self.error_operacion=False
@@ -291,7 +315,7 @@ class ComercialTools:
                 target=args.get('cotizacionId') or payload.get('negociacionActiva')
                 actual=next((q for q in payload.get('cotizaciones',[]) if q.get('id')==target),None)
                 if actual:
-                    self.actual={k:actual.get(k) for k in ('version','estado','consentimiento','preguntaAvisoActual','snapshot')}
+                    self.actual={k:actual.get(k) for k in ('version','estado','consentimiento','preguntaAvisoActual','snapshot','aviso')}
                     self.actual['cotizacionId']=actual['id']
             if name == "comercial_aceptar":
                 if (payload.get("estado") != "aceptada" or payload.get("cotizacionId") != args["cotizacionId"] or payload.get("version") != args["version"]):

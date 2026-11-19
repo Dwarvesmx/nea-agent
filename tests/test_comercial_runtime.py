@@ -216,6 +216,26 @@ async def test_consentimiento_rechazado_no_inventa_registro_ni_crea_propuesta(re
     assert json.loads(route.calls[0].request.content)['mensajeAvisoId']=='mensaje-si'
     await crm.aclose()
 
+async def test_aviso_diagnostico_y_estados_independientes(respx_mock):
+    from app.comercial_v1 import ComercialTools
+    crm = CrmClient('http://crm.test', 'synthetic-commercial-key')
+    base = {'cotizacionId':'q','version':1,'estado':'pendiente','consentimiento':{'registrado':True}}
+    post = respx_mock.post('http://crm.test/api/bot/comercial')
+    post.mock(return_value=httpx.Response(200,json={**base,'diagnosticoInc01':True}))
+    tools = ComercialTools(crm,'conv','d','m',enabled=True)
+    args = {'cotizacionId':'q','version':1,'avisar':True}
+    assert (await tools.execute('comercial_solicitar_aprobacion',args,'a'))['error']=='registro_exclusivamente_diagnostico'
+    assert 'diagnóstico' in tools.respuesta_verificada('Tu aviso está registrado.')
+    post.mock(return_value=httpx.Response(200,json=base))
+    assert (await tools.execute('comercial_solicitar_aprobacion',args,'b'))['ok']
+    assert 'no puedo garantizar' in tools.respuesta_verificada('Te avisaré cuando se apruebe.')
+    for estado, esperado in [('encolado','No tengo confirmación de entrega'), ('enviado','No tengo confirmación de entrega'),
+                             ('entregado','Tu aviso fue entregado.'), ('bloqueado','está bloqueado'), ('fallido','falló')]:
+        tools.actual = {**base,'aviso':{'estado':estado}}
+        assert esperado in tools.respuesta_verificada('Tu aviso fue entregado.')
+    await crm.aclose()
+
+
 async def test_aviso_no_envia_referencia_distinta_de_la_vigente(respx_mock):
     from app.comercial_v1 import ComercialTools
 
